@@ -1,0 +1,56 @@
+[project]
+name = "fin-ingestion"
+version = "0.1.0"
+description = "Ingestion, extraction, analytics and dbt transformation pipeline for Brazilian and global financial markets (B3, CVM, BCB, ANBIMA and 12 equity/FII/ETF analysis platforms)."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Rafael Barros", email = "rafa.a.barros@hotmail.com" }
+]
+license = { text = "MIT" }
+dependencies = [
+    "httpx>=0.27.0",
+    "h2>=4.1.0",
+    "aiohttp>=3.9.3",
+    "beautifulsoup4>=4.12.3",
+    "lxml>=5.1.0",
+    "pydantic>=2.6.4",
+    "pydantic-settings>=2.2.1",
+    "asyncpg>=0.29.0",
+    "sqlalchemy[asyncio]>=2.0.28",
+    "typer>=0.12.3",
+    "rich>=13.7.1",
+    "tenacity>=8.2.3",
+    "structlog>=24.1.0",
+    "pandas>=2.2.1",
+    "numpy>=1.26.4",
+    "scipy>=1.12.0",
+    "dbt-postgres>=1.7.0",
+    "python-dotenv>=1.0.1",
+]
+
+[project.scripts]
+fin-ingestion = "fin_ingestion.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.1.1",
+    "pytest-asyncio>=0.23.6",
+    "ruff>=0.3.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

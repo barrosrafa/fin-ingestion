@@ -1,0 +1,57 @@
+version: 2
+
+sources:
+  - name: raw
+    database: fin
+    schema: raw
+    tables:
+      - name: b3_cothist
+      - name: cvm_demonstrativos
+      - name: bcb_sgs
+      - name: anbima_mercado_secundario
+      - name: status_invest_payloads
+      - name: investidor10_payloads
+      - name: fundamentei_apollo
+      - name: fundamentus_html
+      - name: clube_fii_graphql
+      - name: funds_explorer_payloads
+      - name: fiis_com_br_agenda
+      - name: mais_retorno_metricas
+      - name: analise_de_acoes_checklists
+      - name: brick360_scores
+      - name: advfn_tecnico
+      - name: etfs_brasil_taxas
+
+models:
+  - name: stg_b3_cotacoes
+    description: "Cotações diárias brutas originadas do arquivo posicional COTAHIST da B3"
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: data_pregao
+        tests:
+          - not_null
+      - name: preco_fechamento
+        tests:
+          - not_null
+
+  - name: stg_brick360_scores
+    description: "Scores consolidados de qualidade imobiliária e financeira do Brick360"
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: score_global
+        tests:
+          - not_null
+
+  - name: stg_etfs_brasil_taxas
+    description: "Estrutura de taxas e liquidez de ETFs"
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: custo_total_ter
+        tests:
+          - not_null

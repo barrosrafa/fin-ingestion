@@ -1,0 +1,51 @@
+version: 2
+
+models:
+  - name: dim_ativo
+    description: "Dimensão consolidada de ativos e instrumentos negociáveis"
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+          - unique
+
+  - name: fct_cotacao_diaria
+    description: "Fato de cotações diárias com volume e preços OHLC"
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: data_pregao
+        tests:
+          - not_null
+
+  - name: fct_provento
+    description: "Fato de proventos declarados por ativos"
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: data_com
+        tests:
+          - not_null
+
+  - name: mart_screener_acoes
+    description: "Mart analítico screener para ações com valuation e indicadores técnicos"
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+
+  - name: mart_screener_fiis
+    description: "Mart analítico screener para Fundos Imobiliários com Brick Score e DY"
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+
+  - name: mart_screener_etfs
+    description: "Mart analítico comparador de ETFs"
+    columns:
+      - name: ticker
+        tests:
+          - not_null

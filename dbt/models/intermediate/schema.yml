@@ -1,0 +1,42 @@
+version: 2
+
+models:
+  - name: int_cotacoes_consolidadas
+    description: "Cotações diárias harmonizadas entre B3 e Status Invest"
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: data_pregao
+        tests:
+          - not_null
+      - name: preco_fechamento
+        tests:
+          - not_null
+
+  - name: int_demonstrativos_padronizados
+    description: "Demonstrações financeiras pivotadas da CVM"
+    columns:
+      - name: cnpj
+        tests:
+          - not_null
+      - name: data_referencia
+        tests:
+          - not_null
+
+  - name: int_proventos_ajustados
+    description: "Proventos desduplicados com competência mensal contábil"
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: data_com
+        tests:
+          - not_null
+
+  - name: int_fii_metricas_consolidadas
+    description: "Visão consolidada de FIIs: Clube FII + Brick360"
+    columns:
+      - name: ticker
+        tests:
+          - not_null
