@@ -53,3 +53,27 @@ def test_reconciliation_below_threshold_produces_no_divergence():
     assert result.has_divergence is False
     assert result.divergence_taxonomy is None
     assert result.delta_pct < 1.5
+
+
+def test_reconciliation_with_zero_baseline():
+    engine = ReconciliationEngine()
+    metrics = [
+        MetricInput(
+            source_id="STATUS_INVEST",
+            ticker="KNIP11",
+            metric_name="DY_12M",
+            value=0.0,
+            methodology="12_MONTHS_TRAILING",
+        ),
+        MetricInput(
+            source_id="FUNDS_EXPLORER",
+            ticker="KNIP11",
+            metric_name="DY_12M",
+            value=5.0,
+            methodology="LAST_DIVIDEND_ANNUALIZED",
+        ),
+    ]
+    result = engine.reconcile(ticker="KNIP11", metric_name="DY_12M", metrics=metrics)
+    assert result.has_divergence is True
+    assert result.delta_pct > 1.5
+    assert result.divergence_taxonomy == "DIVIDEND_WINDOW_MISMATCH"

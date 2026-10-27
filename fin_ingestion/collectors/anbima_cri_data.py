@@ -26,6 +26,22 @@ class AnbimaCriCollector:
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = base_url or "https://data.anbima.com.br/api/v1/ofertas-encerradas/cri"
 
+    def fetch_public_dataset(self, mock_payload: Optional[List[Dict[str, Any]]] = None) -> List[AnbimaCriRecord]:
+        if mock_payload is not None:
+            return self.normalize_records(mock_payload)
+
+        import httpx
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.get(self.base_url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    items = data.get("items", data) if isinstance(data, dict) else data
+                    return self.normalize_records(items)
+        except Exception:
+            pass
+        return []
+
     def normalize_records(self, raw_items: List[Dict[str, Any]]) -> List[AnbimaCriRecord]:
         records: List[AnbimaCriRecord] = []
         for item in raw_items:

@@ -56,3 +56,20 @@ def test_anbima_pre_dec_2025_flag():
     collector = AnbimaCriCollector()
     normalized = collector.normalize_records(raw_sample)
     assert normalized[0].is_post_dec_2025 is False
+
+
+def test_fetch_public_dataset_mocked():
+    collector = AnbimaCriCollector()
+    sample_response = [
+        {
+            "codigo_isin": "BRMOCKCRI001",
+            "cnpj_devedor": "12.345.678/0001-90",
+            "razao_social_devedor": "MOCK CORP",
+            "data_encerramento": "2026-03-01",
+            "tipo_operacao": "Concentrado",
+        }
+    ]
+    records = collector.fetch_public_dataset(mock_payload=sample_response)
+    assert len(records) == 1
+    assert records[0].isin == "BRMOCKCRI001"
+    assert records[0].is_post_dec_2025 is True

@@ -60,9 +60,13 @@ class ReconciliationEngine:
         max_delta = 0.0
         taxonomy = None
 
-        if len(values) >= 2 and baseline_val != 0:
+        if len(values) >= 2:
             for m in metrics:
-                delta = abs(m.value - baseline_val) / abs(baseline_val) * 100.0
+                if baseline_val != 0:
+                    delta = abs(m.value - baseline_val) / abs(baseline_val) * 100.0
+                else:
+                    delta = abs(m.value - baseline_val) * 100.0 if abs(m.value - baseline_val) > 0.0001 else 0.0
+
                 if delta > max_delta:
                     max_delta = delta
 

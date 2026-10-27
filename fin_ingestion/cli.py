@@ -33,6 +33,8 @@ from fin_ingestion.collectors.sites import (
 )
 from fin_ingestion.config import settings
 from fin_ingestion.pipelines.orchestrator import PipelineOrchestrator
+from fin_ingestion.pipelines.status_invest_etl import StatusInvestETL
+from fin_ingestion.pipelines.enrichment import AssetMetadataEnricher
 
 app = typer.Typer(
     name="fin-ingestion",
@@ -181,6 +183,55 @@ def dbt_run(
         console.print("[bold yellow]dbt-core não instalado no path global. Instale via 'uv sync' ou 'pip install dbt-postgres'.[/bold yellow]")
     except Exception as e:
         console.print(f"[bold red]Erro ao executar dbt:[/bold red] {e}")
+
+
+@app.command()
+def ingest_statusinvest(
+    stocks_file: Annotated[str, typer.Option("--stocks-file", "-s", help="Caminho do CSV de Ações")] = "data/statusinvest-busca-avancada.csv",
+    fiis_file: Annotated[str, typer.Option("--fiis-file", "-f", help="Caminho do CSV de FIIs")] = "data/statusinvest-busca-avancada-2.csv",
+    batch_size: Annotated[int, typer.Option("--batch-size", "-b", help="Tamanho do lote de batch insert (100 a 200)")] = 150,
+) -> None:
+    """Executa a ingestão completa e determinística dos CSVs do Status Invest no PostgreSQL (Neon)."""
+    console.print(f"[bold cyan]▶️ Iniciando Ingestão Status Invest (batch_size={batch_size})...[/bold cyan]")
+    etl = StatusInvestETL(batch_size=batch_size)
+
+    async def _run():
+        try:
+            return await etl.run(stocks_file, fiis_file)
+        finally:
+            await etl.close()
+
+    result = asyncio.run(_run())
+    table = Table(title="Resultado da Ingestão Status Invest")
+    table.add_column("Métrica", style="bold")
+    table.add_column("Valor", justify="right", style="green")
+
+    table.add_row("Ações Processadas", str(result["stocks_processed"]))
+    table.add_row("FIIs Processados", str(result["fiis_processed"]))
+    table.add_row("Total de Ativos Ingeridos", str(result["total_assets_loaded"]))
+    table.add_row("Data de Referência", str(result["reference_date"]))
+    table.add_row("Tamanho do Lote", str(result["batch_size"]))
+    console.print(table)
+
+
+@app.command()
+def enrich_metadata(
+    limit: Annotated[int, typer.Option("--limit", "-l", help="Quantidade máxima de ativos a enriquecer")] = 50,
+) -> None:
+    """Dispara worker assíncrono para buscar dados cadastrais (nome, setor, CNPJ) via APIs externas."""
+    console.print(f"[bold cyan]▶️ Disparando enriquecimento cadastral para até {limit} ativos...[/bold cyan]")
+    etl = StatusInvestETL()
+
+    async def _run():
+        pool = await etl.get_pool()
+        try:
+            enricher = AssetMetadataEnricher(db_pool=pool)
+            return await enricher.enrich_missing_assets(limit=limit)
+        finally:
+            await etl.close()
+
+    res = asyncio.run(_run())
+    console.print(f"[bold green]Enriquecimento concluído:[/bold green] {res}")
 
 
 @app.command()
