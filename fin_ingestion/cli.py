@@ -431,6 +431,87 @@ def queue_reconcile() -> None:
 
 
 @app.command()
+def dispatch_tasks(
+    max_tasks: Annotated[int, typer.Option("--max-tasks", "-m", help="Número máximo de tarefas a processar")] = 10,
+    lease_duration: Annotated[int, typer.Option("--lease-sec", "-l", help="Tempo de lease em segundos")] = 300,
+) -> None:
+    """Processa um lote de tarefas pendentes na fila PostgreSQL com SKIP LOCKED."""
+    console.print(f"[bold green]▶️ Despachando tarefas da fila (limite: {max_tasks})...[/bold green]")
+    from fin_ingestion.dw.dw_writer import DWWriter
+    from fin_ingestion.dispatcher.task_dispatcher import TaskDispatcher
+
+    async def _run():
+        dw = DWWriter()
+        pool = await dw.get_pool()
+        dispatcher = TaskDispatcher(pool=pool)
+        try:
+            return await dispatcher.dispatch_batch(max_tasks=max_tasks, lease_duration_sec=lease_duration)
+        finally:
+            await dispatcher.close()
+
+    tasks = asyncio.run(_run())
+    console.print(f"[bold cyan]Processamento finalizado:[/bold cyan] {len(tasks)} tarefas executadas.")
+
+
+@app.command()
+def enqueue_task(
+    policy: Annotated[str, typer.Option("--policy", "-p", help="ID da política de ingestão")] = "b3_daily_quotes",
+    dataset: Annotated[str, typer.Option("--dataset", "-d", help="Nome do dataset")] = "cotacao_diaria",
+    target: Annotated[str | None, typer.Option("--target", "-t", help="Ticker ou entidade alvo")] = None,
+    priority: Annotated[int, typer.Option("--priority", help="Prioridade (1 a 10)")] = 5,
+) -> None:
+    """Enfileira uma tarefa na fila persistente PostgreSQL (ingestion.ingestion_task)."""
+    import time
+    from fin_ingestion.dw.dw_writer import DWWriter
+    from fin_ingestion.queue.task_queue import PostgresTaskQueue
+
+    async def _run():
+        dw = DWWriter()
+        pool = await dw.get_pool()
+        queue = PostgresTaskQueue(pool=pool)
+        task_key = f"{dataset}:{target or 'ALL'}:{int(time.time())}"
+        task_id = await queue.enqueue_task(
+            policy_id=policy,
+            task_key=task_key,
+            dataset_name=dataset,
+            target_entity=target,
+            priority=priority,
+        )
+        await dw.close()
+        return task_id
+
+    tid = asyncio.run(_run())
+    console.print(f"[bold green]Tarefa enfileirada com sucesso:[/bold green] {tid}")
+
+
+@app.command()
+def export_snapshots(
+    tickers: Annotated[str | None, typer.Option("--tickers", "-t", help="Tickers separados por vírgula")] = None,
+    output_dir: Annotated[str, typer.Option("--output-dir", "-o", help="Diretório de saída")] = "dist/snapshots",
+    publish_r2: Annotated[bool, typer.Option("--r2", help="Publicar também no Cloudflare R2")] = False,
+) -> None:
+    """Gera snapshots JSON versionados de ações, FIIs, rankings e panorama macro."""
+    console.print(f"[bold cyan]▶️ Exportando snapshots para '{output_dir}' (R2={publish_r2})...[/bold cyan]")
+    from fin_ingestion.dw.dw_writer import DWWriter
+    from fin_ingestion.publishers.snapshot_exporter import SnapshotExporter
+
+    ticker_list = [t.strip().upper() for t in tickers.split(",")] if tickers else None
+
+    async def _run():
+        dw = DWWriter()
+        pool = await dw.get_pool()
+        exporter = SnapshotExporter(pool=pool, local_dir=output_dir)
+        try:
+            return await exporter.export_all(tickers=ticker_list)
+        finally:
+            await exporter.close()
+            await dw.close()
+
+    res = asyncio.run(_run())
+    console.print(f"[bold green]Exportação concluída:[/bold green] {res}")
+
+
+@app.command()
 def version() -> None:
     """Exibe a versão do pacote."""
     console.print("[bold cyan]fin-ingestion v0.1.0[/bold cyan]")
