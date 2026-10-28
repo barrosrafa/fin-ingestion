@@ -1,20 +1,20 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
 class AnbimaCriRecord:
     isin: str
-    codigo_emissao: Optional[str]
-    emissor_securitizadora: Optional[str]
+    codigo_emissao: str | None
+    emissor_securitizadora: str | None
     cnpj_devedor: str
     razao_social_devedor: str
-    nome_fantasia_devedor: Optional[str]
-    data_encerramento: Optional[str]
-    valor_encerrado: Optional[float]
-    tipo_operacao: Optional[str]
-    percentual_garantia_devedor: Optional[float]
+    nome_fantasia_devedor: str | None
+    data_encerramento: str | None
+    valor_encerrado: float | None
+    tipo_operacao: str | None
+    percentual_garantia_devedor: float | None
     is_post_dec_2025: bool = False
 
 
@@ -23,10 +23,10 @@ class AnbimaCriCollector:
 
     DEC_2025_CUTOFF = datetime(2025, 12, 1)
 
-    def __init__(self, base_url: Optional[str] = None):
+    def __init__(self, base_url: str | None = None):
         self.base_url = base_url or "https://data.anbima.com.br/api/v1/ofertas-encerradas/cri"
 
-    def fetch_public_dataset(self, mock_payload: Optional[List[Dict[str, Any]]] = None) -> List[AnbimaCriRecord]:
+    def fetch_public_dataset(self, mock_payload: list[dict[str, Any]] | None = None) -> list[AnbimaCriRecord]:
         if mock_payload is not None:
             return self.normalize_records(mock_payload)
 
@@ -42,8 +42,8 @@ class AnbimaCriCollector:
             pass
         return []
 
-    def normalize_records(self, raw_items: List[Dict[str, Any]]) -> List[AnbimaCriRecord]:
-        records: List[AnbimaCriRecord] = []
+    def normalize_records(self, raw_items: list[dict[str, Any]]) -> list[AnbimaCriRecord]:
+        records: list[AnbimaCriRecord] = []
         for item in raw_items:
             isin = item.get("codigo_isin") or item.get("isin")
             if not isin:

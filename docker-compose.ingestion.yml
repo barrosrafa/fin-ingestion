@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  # Agendador autônomo baseado em políticas e calendários de mercado
+  ingestion-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fin-ingestion-scheduler
+    restart: unless-stopped
+    command: ["python", "-m", "fin_ingestion.cli", "scheduler-start", "--interval", "60"]
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL_ASYNC=${DATABASE_URL_ASYNC}
+      - LOG_LEVEL=INFO
+    networks:
+      - fin-network
+
+  # Worker replicável consumidor da fila persistente no PostgreSQL (FOR UPDATE SKIP LOCKED)
+  ingestion-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "fin_ingestion.workers.runner"]
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL_ASYNC=${DATABASE_URL_ASYNC}
+      - LOG_LEVEL=INFO
+    deploy:
+      replicas: 2
+    networks:
+      - fin-network
+
+networks:
+  fin-network:
+    name: fin-network
+    driver: bridge

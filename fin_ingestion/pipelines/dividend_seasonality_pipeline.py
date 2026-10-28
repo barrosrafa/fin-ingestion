@@ -5,17 +5,18 @@ into the pre-aggregated heatmap matrix `analytics.mapa_sazonalidade_dividendo`.
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Any
+
 import asyncpg
 
 logger = logging.getLogger("fin_ingestion.pipelines.dividend_seasonality")
 
 
 class DividendSeasonalityAggregator:
-    def __init__(self, db_pool: Optional[asyncpg.Pool] = None):
+    def __init__(self, db_pool: asyncpg.Pool | None = None):
         self.db_pool = db_pool
 
-    async def aggregate_seasonality(self) -> Dict[str, Any]:
+    async def aggregate_seasonality(self) -> dict[str, Any]:
         """
         Scans market.provento and populates analytics.mapa_sazonalidade_dividendo
         for all 12 calendar months with occurrence count, analyzed years, average payout
@@ -29,7 +30,7 @@ class DividendSeasonalityAggregator:
             id_ativo, mes_calendario, tipo_evento, ocorrencias_historicas,
             anos_analisados, valor_medio_provento, yield_medio_mensal, ultimo_ano_pago
         )
-        SELECT 
+        SELECT
             p.id_ativo,
             EXTRACT(MONTH FROM p.data_com)::smallint AS mes_calendario,
             'DATA_COM' AS tipo_evento,
@@ -40,15 +41,15 @@ class DividendSeasonalityAggregator:
             MAX(EXTRACT(YEAR FROM p.data_com))::int AS ultimo_ano_pago
         FROM market.provento p
         LEFT JOIN LATERAL (
-            SELECT preco_fechamento 
-            FROM market.cotacao_diaria 
-            WHERE id_ativo = p.id_ativo AND data_pregao <= p.data_com 
+            SELECT preco_fechamento
+            FROM market.cotacao_diaria
+            WHERE id_ativo = p.id_ativo AND data_pregao <= p.data_com
             ORDER BY data_pregao DESC LIMIT 1
         ) cd ON TRUE
         WHERE p.data_com IS NOT NULL
         GROUP BY p.id_ativo, EXTRACT(MONTH FROM p.data_com)
-        ON CONFLICT (id_ativo, mes_calendario, tipo_evento) DO UPDATE 
-        SET 
+        ON CONFLICT (id_ativo, mes_calendario, tipo_evento) DO UPDATE
+        SET
             ocorrencias_historicas = EXCLUDED.ocorrencias_historicas,
             anos_analisados = EXCLUDED.anos_analisados,
             valor_medio_provento = EXCLUDED.valor_medio_provento,

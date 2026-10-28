@@ -35,15 +35,15 @@ class StatusInvestCollector(BaseCollector):
             response = await self.http_client.get(url)
             return {"ticker": ticker, "category": category, "data": response.json()}
         except Exception:
-            # Fallback estruturado para testes / offline
-            return {
-                "ticker": ticker,
-                "category": category,
-                "data": kwargs.get("fallback_data", [
-                    {"date": "2026-10-26", "value": 37.85},
-                    {"date": "2026-10-25", "value": 37.50},
-                ]),
-            }
+            # Fixtures de fallback permitidas estritamente se passadas explicitamente em testes
+            if "fallback_data" in kwargs:
+                return {
+                    "ticker": ticker,
+                    "category": category,
+                    "data": kwargs["fallback_data"],
+                }
+            # Em produção, nunca fabricar dados fictícios
+            raise
 
     def parse(self, raw_data: Any) -> list[dict[str, Any]]:
         if not isinstance(raw_data, dict):

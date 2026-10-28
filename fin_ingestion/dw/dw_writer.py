@@ -53,14 +53,14 @@ class DWWriter:
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (id_ativo, data_pregao) DO UPDATE SET
-            preco_abertura = EXCLUDED.preco_abertura,
-            preco_maximo = EXCLUDED.preco_maximo,
-            preco_minimo = EXCLUDED.preco_minimo,
-            preco_fechamento = EXCLUDED.preco_fechamento,
-            preco_medio = EXCLUDED.preco_medio,
-            volume_total = EXCLUDED.volume_total,
-            quantidade_negocios = EXCLUDED.quantidade_negocios,
-            variacao_percentual = EXCLUDED.variacao_percentual;
+            preco_abertura = COALESCE(EXCLUDED.preco_abertura, market.cotacao_diaria.preco_abertura),
+            preco_maximo = COALESCE(EXCLUDED.preco_maximo, market.cotacao_diaria.preco_maximo),
+            preco_minimo = COALESCE(EXCLUDED.preco_minimo, market.cotacao_diaria.preco_minimo),
+            preco_fechamento = COALESCE(EXCLUDED.preco_fechamento, market.cotacao_diaria.preco_fechamento),
+            preco_medio = COALESCE(EXCLUDED.preco_medio, market.cotacao_diaria.preco_medio),
+            volume_total = COALESCE(EXCLUDED.volume_total, market.cotacao_diaria.volume_total),
+            quantidade_negocios = COALESCE(EXCLUDED.quantidade_negocios, market.cotacao_diaria.quantidade_negocios),
+            variacao_percentual = COALESCE(EXCLUDED.variacao_percentual, market.cotacao_diaria.variacao_percentual);
         """
 
         records = []
@@ -106,4 +106,45 @@ class DWWriter:
 
         logger.info("Cotações diárias gravadas no DW com sucesso", total=len(records))
         return len(records)
+
+    async def write_price_observation(
+        self,
+        ticker: str,
+        price: float | Decimal,
+        observed_at: Any = None,
+        source_name: str = "status_invest",
+        variation: float | Decimal | None = None,
+        volume: float | Decimal | None = None,
+    ) -> bool:
+        """Grava observação pontual em market.cotacao_intraday sem criar OHLC artificial."""
+        ticker_map = await self.get_ticker_id_map()
+        id_ativo = ticker_map.get(ticker)
+        if not id_ativo:
+            return False
+
+        from datetime import datetime, timezone
+        ts = observed_at
+        if isinstance(ts, str):
+            try:
+                ts = datetime.fromisoformat(ts)
+            except Exception:
+                ts = datetime.now(timezone.utc)
+        elif not isinstance(ts, datetime):
+            ts = datetime.now(timezone.utc)
+
+        pool = await self.get_pool()
+        query = """
+        INSERT INTO market.cotacao_intraday (id_ativo, timestamp, preco_atual, variacao, volume)
+        VALUES ($1, $2, $3, $4, $5);
+        """
+        async with pool.acquire() as conn:
+            await conn.execute(
+                query,
+                id_ativo,
+                ts,
+                Decimal(str(price)),
+                Decimal(str(variation)) if variation is not None else None,
+                Decimal(str(volume)) if volume is not None else None,
+            )
+        return True
 

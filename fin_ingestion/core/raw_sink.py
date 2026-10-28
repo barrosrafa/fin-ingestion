@@ -4,7 +4,6 @@ Totalmente aderente ao DDL canônico de raw.ingestion_batch e raw.payload."""
 import hashlib
 import json
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
 import asyncpg

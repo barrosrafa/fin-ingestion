@@ -1,4 +1,3 @@
-import pytest
 from fin_ingestion.collectors.anbima_cri_data import AnbimaCriCollector, AnbimaCriRecord
 
 

@@ -6,6 +6,7 @@ externas (Brapi, Yahoo Finance, CVM) sem travar a carga inicial dos tickers.
 
 import asyncio
 from typing import Any
+
 import asyncpg
 import httpx
 import structlog
@@ -75,19 +76,13 @@ class AssetMetadataEnricher:
 
             return None
 
-    @staticmethod
-    def _synthetic_cnpj_for_ticker(ticker: str) -> str:
-        """Gera um identificador determinístico formatado de CNPJ quando não fornecido pela API."""
-        # Usa os números e hash do ticker para gerar um CNPJ estável
-        h = abs(hash(ticker)) % 100000000
-        return f"{h:08d}000199"[:14]
-
     async def enrich_ticker(
         self,
         ticker: str,
         client: httpx.AsyncClient,
     ) -> bool:
-        """Executa o enriquecimento de um único ticker e persiste em core.emissor_companhia."""
+        """Executa o enriquecimento de um único ticker e persiste em core.emissor_companhia.
+        Não gera CNPJ sintético; mantém CNPJ nulo com status pendente se não confirmado."""
         meta = await self.fetch_ticker_metadata(ticker, client)
         if not meta:
             return False
@@ -95,37 +90,53 @@ class AssetMetadataEnricher:
         nome = meta.get("nome_empresarial") or ticker
         setor = meta.get("setor")
         subsetor = meta.get("subsetor")
-        cnpj = meta.get("cnpj") or self._synthetic_cnpj_for_ticker(ticker)
+        cnpj = meta.get("cnpj")
 
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                # Upsert em core.emissor_companhia
-                emissor_id = await conn.fetchval(
-                    """
-                    INSERT INTO core.emissor_companhia (cnpj, nome_empresarial, setor, subsetor)
-                    VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (cnpj) DO UPDATE SET
-                        nome_empresarial = EXCLUDED.nome_empresarial,
-                        setor = COALESCE(EXCLUDED.setor, core.emissor_companhia.setor),
-                        subsetor = COALESCE(EXCLUDED.subsetor, core.emissor_companhia.subsetor)
-                    RETURNING id_emissor;
-                    """,
-                    cnpj,
-                    nome,
-                    setor,
-                    subsetor,
-                )
+                if cnpj:
+                    emissor_id = await conn.fetchval(
+                        """
+                        INSERT INTO core.emissor_companhia (cnpj, nome_empresarial, setor, subsetor, status_cnpj)
+                        VALUES ($1, $2, $3, $4, 'CONFIRMADO')
+                        ON CONFLICT (cnpj) DO UPDATE SET
+                            nome_empresarial = EXCLUDED.nome_empresarial,
+                            setor = COALESCE(EXCLUDED.setor, core.emissor_companhia.setor),
+                            subsetor = COALESCE(EXCLUDED.subsetor, core.emissor_companhia.subsetor)
+                        RETURNING id_emissor;
+                        """,
+                        cnpj,
+                        nome,
+                        setor,
+                        subsetor,
+                    )
+                else:
+                    # Emissor sem CNPJ confirmado: preserva integridade sem dados sintéticos
+                    emissor_id = await conn.fetchval(
+                        """
+                        INSERT INTO core.emissor_companhia (cnpj, nome_empresarial, setor, subsetor, status_cnpj)
+                        VALUES (NULL, $1, $2, $3, 'PENDENTE_CONFIRMACAO')
+                        ON CONFLICT (nome_empresarial) WHERE cnpj IS NULL DO UPDATE SET
+                            setor = COALESCE(EXCLUDED.setor, core.emissor_companhia.setor),
+                            subsetor = COALESCE(EXCLUDED.subsetor, core.emissor_companhia.subsetor)
+                        RETURNING id_emissor;
+                        """,
+                        nome,
+                        setor,
+                        subsetor,
+                    )
 
-                # Vincula ao core.ativo
-                await conn.execute(
-                    """
-                    UPDATE core.ativo
-                    SET id_emissor = $1
-                    WHERE ticker = $2;
-                    """,
-                    emissor_id,
-                    ticker,
-                )
+                if emissor_id:
+                    # Vincula ao core.ativo
+                    await conn.execute(
+                        """
+                        UPDATE core.ativo
+                        SET id_emissor = $1
+                        WHERE ticker = $2;
+                        """,
+                        emissor_id,
+                        ticker,
+                    )
         return True
 
     async def enrich_missing_assets(self, limit: int = 100) -> dict[str, int]:

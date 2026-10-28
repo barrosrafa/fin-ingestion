@@ -1,11 +1,11 @@
 """Pipeline de ingestão de Indicadores Macroeconômicos, Crédito, Fluxo de Investidores B3 e Valuation IBOV."""
 
-from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any
+
 import structlog
 
-from fin_ingestion.collectors.official.bcb import BCBCollector
 from fin_ingestion.collectors.official.b3 import B3Collector
+from fin_ingestion.collectors.official.bcb import BCBCollector
 
 logger = structlog.get_logger(__name__)
 
@@ -17,7 +17,7 @@ class Oceans14MacroMarketPipeline:
         self.bcb = BCBCollector()
         self.b3 = B3Collector()
 
-    async def collect_macro_credit_indicators(self, ultimos: int = 12) -> Dict[str, List[Dict[str, Any]]]:
+    async def collect_macro_credit_indicators(self, ultimos: int = 12) -> dict[str, list[dict[str, Any]]]:
         """Coleta séries temporais do Bacen SGS para crédito, poupança, contas públicas e TCR."""
         series_keys = [
             "poupanca_captacao",
@@ -34,7 +34,7 @@ class Oceans14MacroMarketPipeline:
         ]
 
         logger.info("Iniciando coleta de indicadores macro e crédito Bacen", series_count=len(series_keys))
-        collected_data: Dict[str, List[Dict[str, Any]]] = {}
+        collected_data: dict[str, list[dict[str, Any]]] = {}
 
         for key in series_keys:
             try:
@@ -47,10 +47,10 @@ class Oceans14MacroMarketPipeline:
         return collected_data
 
     def harmonize_credit_system_monthly(
-        self, raw_macro_series: Dict[str, List[Dict[str, Any]]]
-    ) -> List[Dict[str, Any]]:
+        self, raw_macro_series: dict[str, list[dict[str, Any]]]
+    ) -> list[dict[str, Any]]:
         """Harmoniza múltiplos indicadores mensais de crédito em registros unificados por data_referencia."""
-        monthly_map: Dict[str, Dict[str, Any]] = {}
+        monthly_map: dict[str, dict[str, Any]] = {}
 
         for serie_key, rows in raw_macro_series.items():
             for r in rows:
@@ -96,10 +96,10 @@ class Oceans14MacroMarketPipeline:
         return sorted(monthly_map.values(), key=lambda x: x["data_referencia"])
 
     def harmonize_government_accounts_monthly(
-        self, raw_macro_series: Dict[str, List[Dict[str, Any]]]
-    ) -> List[Dict[str, Any]]:
+        self, raw_macro_series: dict[str, list[dict[str, Any]]]
+    ) -> list[dict[str, Any]]:
         """Harmoniza dados do Tesouro Nacional / Bacen de receitas, despesas e dívida pública."""
-        monthly_map: Dict[str, Dict[str, Any]] = {}
+        monthly_map: dict[str, dict[str, Any]] = {}
 
         for serie_key, rows in raw_macro_series.items():
             for r in rows:
@@ -130,25 +130,43 @@ class Oceans14MacroMarketPipeline:
         return sorted(monthly_map.values(), key=lambda x: x["data_referencia"])
 
     def calculate_ibov_pe_corridor(
-        self, historical_points: List[Dict[str, float]]
-    ) -> List[Dict[str, Any]]:
-        """Calcula a média móvel de 5 anos e as bandas de desvio padrão (+-1dp e +-2dp) para a série histórica do P/L Ibov."""
+        self, historical_points: list[dict[str, Any]], window_months: int = 60
+    ) -> list[dict[str, Any]]:
+        """
+        Calcula a média móvel causal de 5 anos (60 meses) e as bandas de desvio padrão
+        (+-1dp e +-2dp) para a série histórica do P/L Ibov sem lookahead bias.
+        """
+        sorted_points = sorted(historical_points, key=lambda x: str(x["data_referencia"]))
         results = []
-        pe_values = [p["pl_ponderado"] for p in historical_points if "pl_ponderado" in p and p["pl_ponderado"] > 0]
 
-        mean_pe = sum(pe_values) / len(pe_values) if pe_values else 10.0
-        variance = sum((x - mean_pe) ** 2 for x in pe_values) / len(pe_values) if len(pe_values) > 1 else 4.0
-        sd_pe = variance ** 0.5
+        for idx, p in enumerate(sorted_points):
+            # Janela causal: somente pontos passados até a data de referência corrente
+            window_slice = sorted_points[max(0, idx - window_months + 1):idx + 1]
+            pe_window = [
+                pt["pl_ponderado"]
+                for pt in window_slice
+                if "pl_ponderado" in pt and pt["pl_ponderado"] is not None and pt["pl_ponderado"] > 0
+            ]
 
-        for p in historical_points:
+            if len(pe_window) >= 6:
+                mean_pe = sum(pe_window) / len(pe_window)
+                variance = sum((x - mean_pe) ** 2 for x in pe_window) / (len(pe_window) - 1)
+                sd_pe = variance ** 0.5
+            elif pe_window:
+                mean_pe = sum(pe_window) / len(pe_window)
+                sd_pe = 1.5
+            else:
+                mean_pe = float(p.get("pl_ponderado") or 10.0)
+                sd_pe = 1.5
+
             results.append({
                 "data_referencia": p["data_referencia"],
                 "codigo_indice": p.get("codigo_indice", "IBOV"),
                 "fechamento_indice": p["fechamento_indice"],
                 "pl_ponderado": p["pl_ponderado"],
-                "pl_mediano": p.get("pl_mediano", round(p["pl_ponderado"] * 0.95, 2)),
-                "pl_medio_aritmetico": p.get("pl_medio_aritmetico", round(p["pl_ponderado"] * 1.05, 2)),
-                "lucro_projetado_fwd": p.get("lucro_projetado_fwd", round(p["pl_ponderado"] * 0.92, 2)),
+                "pl_mediano": p.get("pl_mediano", p["pl_ponderado"]),
+                "pl_medio_aritmetico": p.get("pl_medio_aritmetico", p["pl_ponderado"]),
+                "lucro_projetado_fwd": p.get("lucro_projetado_fwd", p["pl_ponderado"]),
                 "media_historica_5y": round(mean_pe, 2),
                 "desvio_padrao_5y": round(sd_pe, 2),
                 "banda_superior_1dp": round(mean_pe + sd_pe, 2),

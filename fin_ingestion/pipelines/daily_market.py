@@ -25,9 +25,36 @@ class DailyMarketPipeline:
         self.advfn = ADVFNCollector()
         self.dw_writer = DWWriter()
 
-    async def run(self, tickers: list[str] | None = None) -> dict[str, Any]:
-        target_tickers = tickers or ["PETR4", "VALE3", "ITUB4", "BBDC4", "BBAS3"]
-        logger.info("Iniciando pipeline diário de mercado", tickers=target_tickers)
+    async def get_active_universe(self, limit: int = 50, offset: int = 0) -> list[str]:
+        """Consulta o universo ativo cadastrado no banco, com ordenação por liquidez e paginação."""
+        try:
+            pool = await self.dw_writer.get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT ticker FROM core.ativo
+                    WHERE ticker IS NOT NULL
+                      AND tipo_ativo IN ('ACAO', 'FII', 'ETF', 'BDR')
+                    ORDER BY volume_medio DESC NULLS LAST, ticker ASC
+                    LIMIT $1 OFFSET $2;
+                    """,
+                    limit,
+                    offset,
+                )
+                if rows:
+                    return [r["ticker"] for r in rows]
+        except Exception as e:
+            logger.warning("Falha ao carregar universo ativo do banco; usando ativos base", error=str(e))
+        return ["PETR4", "VALE3", "ITUB4", "BBDC4", "BBAS3"]
+
+    async def run(
+        self,
+        tickers: list[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        target_tickers = tickers or await self.get_active_universe(limit=limit, offset=offset)
+        logger.info("Iniciando pipeline diário de mercado", tickers=target_tickers, count=len(target_tickers))
 
         results: dict[str, CollectorResult] = {}
 
@@ -46,6 +73,7 @@ class DailyMarketPipeline:
         advfn_results = await asyncio.gather(*advfn_tasks, return_exceptions=True)
 
         quotes_to_persist = []
+        intraday_observations_written = 0
         for t, res in zip(target_tickers, status_results):
             if isinstance(res, CollectorResult):
                 results[f"status_invest_{t}"] = res
@@ -53,15 +81,31 @@ class DailyMarketPipeline:
                     dt = r.get("data_referencia")
                     val = r.get("valor")
                     if dt and val is not None:
+                        # Grava observação pontual no mercado sem forçar OHLC artificial
+                        try:
+                            saved = await self.dw_writer.write_price_observation(
+                                ticker=t,
+                                price=val,
+                                observed_at=dt,
+                                source_name="status_invest",
+                            )
+                            if saved:
+                                intraday_observations_written += 1
+                        except Exception as e:
+                            logger.debug("Falha ao gravar cotação intraday", ticker=t, error=str(e))
+
+                        # Para market.cotacao_diaria, grava somente campos reais fornecidos;
+                        # NÃO replica valor pontual em abertura/máxima/mínima nem inventa volume zero
                         quotes_to_persist.append({
                             "ticker": t,
                             "data_pregao": dt,
                             "preco_fechamento": val,
-                            "preco_abertura": val,
-                            "preco_maximo": val,
-                            "preco_minimo": val,
-                            "volume_total": 0,
-                            "quantidade_negocios": 0,
+                            "preco_abertura": None,
+                            "preco_maximo": None,
+                            "preco_minimo": None,
+                            "preco_medio": None,
+                            "volume_total": None,
+                            "quantidade_negocios": None,
                         })
 
         for t, res in zip(target_tickers, advfn_results):
@@ -88,5 +132,6 @@ class DailyMarketPipeline:
             "pipeline": "daily_market",
             "total_records": total_records,
             "quotes_written": written_quotes,
+            "intraday_observations": intraday_observations_written,
             "sources_executed": list(results.keys()),
         }

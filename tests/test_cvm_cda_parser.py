@@ -1,5 +1,6 @@
 import pytest
-from fin_ingestion.pipelines.cvm_cda_parser import CvmCdaParser, CdaHoldingItem, CdaPortfolioResult
+
+from fin_ingestion.pipelines.cvm_cda_parser import CdaPortfolioResult, CvmCdaParser
 
 
 def test_cvm_cda_parser_resolution():

@@ -1,6 +1,8 @@
-import pytest
-from unittest.mock import AsyncMock, MagicMock
 from datetime import date
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from fin_ingestion.collectors.sites.etfs_brasil import ETFsBrasilCollector
 from fin_ingestion.pipelines.etfs_brasil_pipeline import ETFsBrasilIngestionPipeline
 
@@ -9,8 +11,28 @@ from fin_ingestion.pipelines.etfs_brasil_pipeline import ETFsBrasilIngestionPipe
 async def test_etfs_brasil_collector_detail_and_composition():
     collector = ETFsBrasilCollector()
 
-    # Test extract detail
-    detail = await collector.extract(ticker="BOVA11", mode="detail")
+    fixture_detail = {
+        "taxa_primaria": 0.10,
+        "taxa_secundaria": 0.00,
+        "taxa_total_ter": 0.10,
+        "nav": 172.10,
+        "preco_mercado": 172.42,
+        "spread_nav_pct": 0.18,
+        "limite_aluguel_pct": 40.0,
+        "fluxo_30d_milhoes": 1673.8,
+        "cotistas": 104623,
+        "patrimonio_milhoes": 18947.8,
+        "indice_referencia": "IBOVESPA",
+        "gestor": "BlackRock Brasil",
+    }
+    fixture_comp = [
+        {"ticker": "VALE3", "name": "Vale S.A.", "sector": "Materiais Básicos", "weight_pct": 13.5},
+        {"ticker": "PETR4", "name": "Petrobras PN", "sector": "Petróleo e Gás", "weight_pct": 11.2},
+        {"ticker": "ITUB4", "name": "Itaú Unibanco PN", "sector": "Financeiro", "weight_pct": 8.6},
+    ]
+
+    # Test extract detail com fixture de teste
+    detail = await collector.extract(ticker="BOVA11", mode="detail", fallback_data=fixture_detail)
     assert detail["ticker"] == "BOVA11"
     parsed_detail = collector.parse(detail)
     assert len(parsed_detail) == 1
@@ -18,13 +40,14 @@ async def test_etfs_brasil_collector_detail_and_composition():
     assert parsed_detail[0]["custo_total_ter"] == 0.10
     assert parsed_detail[0]["indice_referencia"] == "IBOVESPA"
 
-    # Test extract composition
-    comp = await collector.extract(ticker="BOVA11", mode="composition")
+    # Test extract composition com fixture de teste
+    comp = await collector.extract(ticker="BOVA11", mode="composition", fallback_data=fixture_comp)
     assert comp["mode"] == "composition"
     parsed_comp = collector.parse(comp)
     assert len(parsed_comp) >= 3
     assert parsed_comp[0]["codigo_ativo"] == "VALE3"
     assert parsed_comp[0]["peso_pct"] == 13.5
+    await collector.close()
 
 
 @pytest.mark.asyncio

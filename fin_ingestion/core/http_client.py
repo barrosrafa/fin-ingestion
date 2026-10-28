@@ -11,8 +11,31 @@ from tenacity import (
     wait_random_exponential,
 )
 
-from fin_ingestion.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenException
+from fin_ingestion.core.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerOpenException,
+    CircuitState,
+)
 from fin_ingestion.core.rate_limiter import AsyncRateLimiter
+
+
+class RateLimitExceededError(Exception):
+    """Lançada quando a fonte externa retorna HTTP 429 Too Many Requests."""
+
+    def __init__(self, message: str, retry_after: int = 60) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+RateLimitExceededException = RateLimitExceededError
+
+
+class AuthenticationBlockedError(Exception):
+    """Lançada quando a fonte externa rejeita credenciais ou bloqueia acesso (HTTP 401/403)."""
+    pass
+
+
+AuthenticationBlockedException = AuthenticationBlockedError
 
 DEFAULT_USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -104,15 +127,18 @@ class ResilientHttpClient:
 
         try:
             response = await client.get(endpoint, params=params, headers=headers)
-            if response.status_code >= 500:
-                self.circuit_breaker.record_failure()
-            else:
-                self.circuit_breaker.record_success()
+            self._handle_response_status(response)
             return response
         except Exception:
             self.circuit_breaker.record_failure()
             raise
 
+    @retry(
+        retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
+        stop=stop_after_attempt(3),
+        wait=wait_random_exponential(multiplier=1, max=10),
+        reraise=True,
+    )
     async def post(
         self,
         endpoint: str,
@@ -130,11 +156,29 @@ class ResilientHttpClient:
 
         try:
             response = await client.post(endpoint, data=data, json=json, headers=headers)
-            if response.status_code >= 500:
-                self.circuit_breaker.record_failure()
-            else:
-                self.circuit_breaker.record_success()
+            self._handle_response_status(response)
             return response
         except Exception:
             self.circuit_breaker.record_failure()
             raise
+
+    def _handle_response_status(self, response: httpx.Response) -> None:
+        """Avalia códigos HTTP de erro e aciona circuit breaker / cooldown."""
+        if response.status_code == 429:
+            retry_after_hdr = response.headers.get("Retry-After")
+            wait_sec = int(retry_after_hdr) if retry_after_hdr and retry_after_hdr.isdigit() else 60
+            self.circuit_breaker.record_failure()
+            raise RateLimitExceededException(
+                f"Rate limit (429) excedido para {self.name}. Retry-After: {wait_sec}s.",
+                retry_after=wait_sec,
+            )
+        elif response.status_code in (401, 403):
+            # Bloqueio cadastral ou de IP: abre o circuito imediatamente
+            self.circuit_breaker.state = CircuitState.OPEN
+            raise AuthenticationBlockedException(
+                f"Acesso bloqueado ({response.status_code}) para {self.name}."
+            )
+        elif response.status_code >= 500:
+            self.circuit_breaker.record_failure()
+        else:
+            self.circuit_breaker.record_success()

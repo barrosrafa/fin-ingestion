@@ -1,5 +1,9 @@
 import pytest
-from fin_ingestion.pipelines.reconciliation_pipeline import ReconciliationEngine, MetricInput, DivergenceResult
+
+from fin_ingestion.pipelines.reconciliation_pipeline import (
+    MetricInput,
+    ReconciliationEngine,
+)
 
 
 def test_reconciliation_detects_dividend_window_divergence():

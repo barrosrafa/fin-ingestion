@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -8,8 +8,8 @@ class CdaHoldingItem:
     ativo_tipo: str
     peso_pl_pct: float
     valor_contabil: float
-    canonical_group: Optional[str] = None
-    cnpj_devedor: Optional[str] = None
+    canonical_group: str | None = None
+    cnpj_devedor: str | None = None
     coverage_category: str = "TEMPORARY_PENDING_CURATION" # RESOLVED, TEMPORARY_PENDING_CURATION, STRUCTURE_OPAQUE
     provenance: str = "CVM_CDA_175"
 
@@ -21,7 +21,7 @@ class CdaPortfolioResult:
     pct_resolved: float = 0.0
     pct_temporary_pending: float = 0.0
     pct_structure_opaque: float = 0.0
-    items: List[CdaHoldingItem] = field(default_factory=list)
+    items: list[CdaHoldingItem] = field(default_factory=list)
 
 
 class CvmCdaParser:
@@ -29,8 +29,8 @@ class CvmCdaParser:
 
     def __init__(
         self,
-        anbima_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
-        legacy_seed_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
+        anbima_lookup: dict[str, dict[str, Any]] | None = None,
+        legacy_seed_lookup: dict[str, dict[str, Any]] | None = None,
     ):
         self.anbima_lookup = anbima_lookup or {}
         self.legacy_seed_lookup = legacy_seed_lookup or {}
@@ -39,9 +39,9 @@ class CvmCdaParser:
         self,
         ticker: str,
         pl_total: float,
-        raw_holdings: List[Dict[str, Any]],
+        raw_holdings: list[dict[str, Any]],
     ) -> CdaPortfolioResult:
-        items: List[CdaHoldingItem] = []
+        items: list[CdaHoldingItem] = []
         pct_resolved = 0.0
         pct_temp_pending = 0.0
         pct_opaque = 0.0

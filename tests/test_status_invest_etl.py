@@ -1,15 +1,15 @@
 """Testes unitários e de integração para o pipeline Status Invest ETL e sanitização."""
 
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
+from fin_ingestion.pipelines.enrichment import AssetMetadataEnricher
 from fin_ingestion.pipelines.status_invest_etl import (
     StatusInvestETL,
     sanitize_decimal,
     sanitize_int,
 )
-from fin_ingestion.pipelines.enrichment import AssetMetadataEnricher
 
 
 def test_sanitize_decimal_brazilian_numbers():
@@ -57,12 +57,6 @@ def test_csv_reading_stock_and_fii(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_enrichment_worker_synthetic_cnpj():
-    cnpj_petr4 = AssetMetadataEnricher._synthetic_cnpj_for_ticker("PETR4")
-    assert len(cnpj_petr4) == 14
-    assert cnpj_petr4.endswith("000199")
-
-    cnpj_vale3 = AssetMetadataEnricher._synthetic_cnpj_for_ticker("VALE3")
-    assert len(cnpj_vale3) == 14
-    # Determinístico
-    assert cnpj_petr4 == AssetMetadataEnricher._synthetic_cnpj_for_ticker("PETR4")
+async def test_enrichment_worker_handles_missing_cnpj():
+    # Garante que enriquecimento não gera CNPJ sintético falso
+    assert not hasattr(AssetMetadataEnricher, "_synthetic_cnpj_for_ticker")

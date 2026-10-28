@@ -1,8 +1,13 @@
-import pytest
-from unittest.mock import AsyncMock, MagicMock
 from datetime import date
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from fin_ingestion.pipelines.analise_de_acoes_pipeline import (
+    PtaxExchangeRatePipeline,
+    USAssetsIngestionPipeline,
+)
 from fin_ingestion.pipelines.dividend_seasonality_pipeline import DividendSeasonalityAggregator
-from fin_ingestion.pipelines.analise_de_acoes_pipeline import PtaxExchangeRatePipeline, USAssetsIngestionPipeline
 
 
 @pytest.mark.asyncio

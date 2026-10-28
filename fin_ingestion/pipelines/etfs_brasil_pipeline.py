@@ -5,22 +5,23 @@ and calculates analytical portfolio overlap for canonical pairs.
 """
 
 import logging
-from typing import Optional, Dict, Any, List
 from datetime import date
+from typing import Any
+
 import asyncpg
 
 logger = logging.getLogger("fin_ingestion.pipelines.etfs_brasil")
 
 
 class ETFsBrasilIngestionPipeline:
-    def __init__(self, db_pool: Optional[asyncpg.Pool] = None):
+    def __init__(self, db_pool: asyncpg.Pool | None = None):
         self.db_pool = db_pool
 
     async def sync_etf_holdings(
         self,
         id_ativo_fundo: int,
         data_referencia: date,
-        holdings: List[Dict[str, Any]],
+        holdings: list[dict[str, Any]],
     ) -> int:
         """
         Inserts or replaces the open holdings composition for an ETF/Fund on a given cut date.
@@ -29,12 +30,12 @@ class ETFsBrasilIngestionPipeline:
             raise RuntimeError("Database pool not initialized")
 
         delete_stmt = """
-        DELETE FROM market.etf_composicao_carteira 
+        DELETE FROM market.etf_composicao_carteira
         WHERE id_ativo_fundo = $1 AND data_referencia = $2;
         """
         insert_stmt = """
         INSERT INTO market.etf_composicao_carteira (
-            id_ativo_fundo, data_referencia, codigo_ativo, descricao_ativo, 
+            id_ativo_fundo, data_referencia, codigo_ativo, descricao_ativo,
             setor_economico, pais_origem, peso_percentual
         ) VALUES ($1, $2, $3, $4, $5, $6, $7);
         """
@@ -73,7 +74,7 @@ class ETFsBrasilIngestionPipeline:
         numero_cotistas: int,
         aluguel_acoes_pl_pct: float = 0.0,
         tracking_difference_diario: float = 0.0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Stores daily ETF pricing, accounting NAV, and tracking difference in market.etf_metricas_diarias.
         """
@@ -121,9 +122,9 @@ class ETFsBrasilIngestionPipeline:
 
     @staticmethod
     def calculate_holdings_overlap(
-        holdings_a: List[Dict[str, Any]],
-        holdings_b: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        holdings_a: list[dict[str, Any]],
+        holdings_b: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """
         Calculates the portfolio holdings overlap sum(min(w_A_i, w_B_i)).
         """

@@ -8,12 +8,13 @@ em lotes de 100 a 200 registros no Neon PostgreSQL com garantias de idempotênci
 from __future__ import annotations
 
 import csv
+import ssl
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+
 import asyncpg
-import ssl
 import structlog
 
 from fin_ingestion.config import settings
@@ -95,7 +96,7 @@ class StatusInvestETL:
         if not p.exists():
             raise FileNotFoundError(f"Arquivo CSV não encontrado: {p.resolve()}")
 
-        with open(p, "r", encoding="utf-8-sig") as f:
+        with open(p, encoding="utf-8-sig") as f:
             reader = csv.DictReader(f, delimiter=";")
             clean_rows = []
             for row in reader:

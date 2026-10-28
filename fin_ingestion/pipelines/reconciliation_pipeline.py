@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 
 @dataclass
@@ -8,7 +7,7 @@ class MetricInput:
     ticker: str
     metric_name: str
     value: float
-    methodology: Optional[str] = None
+    methodology: str | None = None
 
 
 @dataclass
@@ -22,7 +21,7 @@ class DivergenceResult:
     consensus_iqr: float
     anchor_source: str
     anchor_value: float
-    divergence_taxonomy: Optional[str] = None
+    divergence_taxonomy: str | None = None
 
 
 class ReconciliationEngine:
@@ -40,7 +39,7 @@ class ReconciliationEngine:
 
     DIVERGENCE_THRESHOLD_PCT = 1.5
 
-    def reconcile(self, ticker: str, metric_name: str, metrics: List[MetricInput]) -> DivergenceResult:
+    def reconcile(self, ticker: str, metric_name: str, metrics: list[MetricInput]) -> DivergenceResult:
         if not metrics:
             raise ValueError("No metrics provided for reconciliation")
 
@@ -87,7 +86,7 @@ class ReconciliationEngine:
             divergence_taxonomy=taxonomy,
         )
 
-    def _classify_taxonomy(self, metric_name: str, metrics: List[MetricInput]) -> str:
+    def _classify_taxonomy(self, metric_name: str, metrics: list[MetricInput]) -> str:
         # Check known methodology differences
         methodologies = {m.source_id: m.methodology for m in metrics if m.methodology}
         if "DY" in metric_name or "DIVIDEND" in metric_name:

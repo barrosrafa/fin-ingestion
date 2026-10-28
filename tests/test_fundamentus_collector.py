@@ -1,6 +1,7 @@
 """Testes unitários exaustivos para o FundamentusCollector no fin-ingestion."""
 
 import pytest
+
 from fin_ingestion.collectors.sites.fundamentus import FundamentusCollector
 
 

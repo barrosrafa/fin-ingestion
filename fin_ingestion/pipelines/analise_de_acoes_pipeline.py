@@ -5,15 +5,16 @@ and reconciles US Stocks/REITs with withholding tax parameters.
 """
 
 import logging
-from typing import Optional, Dict, Any, List
-from datetime import date, datetime
+from datetime import date
+from typing import Any
+
 import asyncpg
 
 logger = logging.getLogger("fin_ingestion.pipelines.analise_de_acoes")
 
 
 class PtaxExchangeRatePipeline:
-    def __init__(self, db_pool: Optional[asyncpg.Pool] = None):
+    def __init__(self, db_pool: asyncpg.Pool | None = None):
         self.db_pool = db_pool
 
     async def ingest_daily_ptax(
@@ -22,7 +23,7 @@ class PtaxExchangeRatePipeline:
         moeda_origem: str = "USD",
         taxa_compra: float = 5.3520,
         taxa_venda: float = 5.3526,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Stores daily official PTAX exchange rate for foreign asset valuation.
         """
@@ -47,7 +48,7 @@ class PtaxExchangeRatePipeline:
 
 
 class USAssetsIngestionPipeline:
-    def __init__(self, db_pool: Optional[asyncpg.Pool] = None):
+    def __init__(self, db_pool: asyncpg.Pool | None = None):
         self.db_pool = db_pool
 
     async def sync_reit_metrics(
@@ -64,7 +65,7 @@ class USAssetsIngestionPipeline:
         occupancy_rate: float,
         properties_count: int,
         leverage_ev: float,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Syncs Nareit accounting metrics (FFO, AFFO, P/FFO, P/AFFO) for REITs.
         """

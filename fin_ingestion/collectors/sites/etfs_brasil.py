@@ -1,6 +1,7 @@
 """Coletor ETFs Brasil: API FastAPI, estrutura de taxas (TER), spread NAV, composição e fluxos."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from fin_ingestion.core.base_collector import BaseCollector
 
 
@@ -17,40 +18,23 @@ class ETFsBrasilCollector(BaseCollector):
         url = f"/api/backend/etf/{ticker}" if mode == "detail" else "/api/backend/home"
         try:
             response = await self.http_client.get(url)
-            return {"ticker": ticker, "mode": mode, "data": response.json()}
-        except Exception:
-            # Fallback robusto parametrizado
-            if mode == "composition":
-                return {
-                    "ticker": ticker,
-                    "mode": mode,
-                    "data": kwargs.get("fallback_data", [
-                        {"ticker": "VALE3", "name": "Vale S.A.", "sector": "Materiais Básicos", "weight_pct": 13.5},
-                        {"ticker": "PETR4", "name": "Petrobras PN", "sector": "Petróleo e Gás", "weight_pct": 11.2},
-                        {"ticker": "ITUB4", "name": "Itaú Unibanco PN", "sector": "Financeiro", "weight_pct": 8.6},
-                    ]),
-                }
+            return {"ticker": ticker, "mode": mode, "status": "SUCCESS", "data": response.json()}
+        except Exception as e:
+            if "fallback_data" in kwargs:
+                return {"ticker": ticker, "mode": mode, "status": "SUCCESS", "data": kwargs["fallback_data"]}
             return {
                 "ticker": ticker,
                 "mode": mode,
-                "data": kwargs.get("fallback_data", {
-                    "taxa_primaria": 0.10 if ticker == "BOVA11" else 0.30,
-                    "taxa_secundaria": 0.00,
-                    "taxa_total_ter": 0.10 if ticker == "BOVA11" else 0.30,
-                    "nav": 172.10,
-                    "preco_mercado": 172.42,
-                    "spread_nav_pct": 0.18,
-                    "limite_aluguel_pct": 40.0,
-                    "fluxo_30d_milhoes": 1673.8,
-                    "cotistas": 104623,
-                    "patrimonio_milhoes": 18947.8,
-                    "indice_referencia": "IBOVESPA",
-                    "gestor": "BlackRock Brasil",
-                }),
+                "status": "FAILED",
+                "error": str(e),
+                "data": None,
             }
 
     def parse(self, raw_data: Any) -> list[dict[str, Any]]:
         if not isinstance(raw_data, dict):
+            return []
+
+        if raw_data.get("status") == "FAILED" or not raw_data.get("data"):
             return []
 
         ticker = raw_data.get("ticker", "").upper()

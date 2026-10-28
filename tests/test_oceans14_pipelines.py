@@ -1,8 +1,7 @@
 """Testes unitários dos pipelines do Oceans14 (Macro, Crédito, Mercado e Demonstrações Financeiras)."""
 
-import pytest
-from fin_ingestion.pipelines.oceans14_macro_market_pipeline import Oceans14MacroMarketPipeline
 from fin_ingestion.pipelines.financial_matrix_pipeline import FinancialMatrixPipeline
+from fin_ingestion.pipelines.oceans14_macro_market_pipeline import Oceans14MacroMarketPipeline
 
 
 def test_calculate_cagr():
