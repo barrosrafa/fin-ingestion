@@ -16,6 +16,20 @@ class BCBCollector(BaseCollector):
         "igpm": 189,
         "cdi": 12,
         "tr": 226,
+        # Oceans14 Macro, Credit & Government Accounts Series
+        "poupanca_saldo": 1832,
+        "poupanca_captacao": 2006,
+        "inadimplencia_pf": 21082,
+        "inadimplencia_pj": 21085,
+        "inadimplencia_total": 21084,
+        "credito_pj": 20539,
+        "credito_pf": 20540,
+        "credito_imobiliario": 20541,
+        "tcr_efetiva": 11752,
+        "resultado_primario_governo": 4447,
+        "receita_liquida_governo": 4448,
+        "despesa_total_governo": 4449,
+        "divida_bruta_pib": 4505,
     }
 
     def __init__(self) -> None:
