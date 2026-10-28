@@ -1,0 +1,77 @@
+name: Scheduled Market Ingestion & Enrichment
+
+on:
+  schedule:
+    # Seg-Sex a cada 2h durante horário de negociação da B3 (11:00, 13:00, 15:00, 17:00 BRT = 14:00, 16:00, 18:00, 20:00 UTC)
+    - cron: '0 14,16,18,20 * * 1-5'
+    # Seg-Sex no fechamento de pregão (18:30 BRT = 21:30 UTC)
+    - cron: '30 21 * * 1-5'
+    # Domingo à noite para enriquecimento cadastral profundo (20:00 BRT = 23:00 UTC)
+    - cron: '0 23 * * 0'
+  workflow_dispatch:
+    inputs:
+      pipeline:
+        description: 'Nome do pipeline (daily, quarterly, monthly, all)'
+        required: true
+        default: 'daily'
+      tickers:
+        description: 'Tickers específicos separados por vírgula (ou deixe vazio para todos)'
+        required: false
+        default: ''
+      enrich_limit:
+        description: 'Limite de ativos para enriquecimento de metadados'
+        required: false
+        default: '50'
+
+jobs:
+  ingest-and-enrich:
+    name: Run Ingestion Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_URL_ASYNC: ${{ secrets.DATABASE_URL_ASYNC }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install uv (Fast Python Package Manager)
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install Dependencies
+        run: |
+          uv sync --frozen || uv sync
+
+      - name: Execute Market Ingestion (Idempotent Upsert)
+        run: |
+          PIPELINE="${{ github.event.inputs.pipeline || 'daily' }}"
+          TICKERS_ARG=""
+          if [ -n "${{ github.event.inputs.tickers }}" ]; then
+            TICKERS_ARG="--tickers ${{ github.event.inputs.tickers }}"
+          fi
+          echo "Executing pipeline: $PIPELINE $TICKERS_ARG"
+          uv run fin-ingestion collect --pipeline "$PIPELINE" $TICKERS_ARG
+
+      - name: Execute Metadata Enrichment
+        run: |
+          LIMIT="${{ github.event.inputs.enrich_limit || '50' }}"
+          echo "Enriching metadata with limit: $LIMIT"
+          uv run fin-ingestion enrich-metadata --limit "$LIMIT"
+
+      - name: Pipeline Execution Summary
+        if: always()
+        run: |
+          echo "### Ingestion Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Event:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY

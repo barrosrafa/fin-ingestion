@@ -120,3 +120,22 @@ uv run pytest -v
 uv run ruff check .
 uv run ruff format .
 ```
+
+---
+
+## 🤖 Automação em Nuvem Gratuita (GitHub Actions)
+
+As rotinas de ingestão incremental operam de forma 100% autônoma via workflow agendado em [`.github/workflows/scheduled-ingestion.yml`](.github/workflows/scheduled-ingestion.yml):
+
+### ⏰ Cronogramas Programados
+- **Pregão B3 (Seg-Sex, 11:00 às 17:00 a cada 2h)**: Ingestão de cotações e novos tickers.
+- **Fechamento Diário (Seg-Sex, 18:30 BRT)**: Consolidação de fechamento, proventos e indicadores.
+- **Fim de Semana (Domingo, 20:00 BRT)**: Enriquecimento cadastral e novos ativos (`enrich-metadata`).
+- **Disparo Manual**: Aba **Actions** -> **Scheduled Market Ingestion & Enrichment** -> **Run workflow**.
+
+### 🔑 GitHub Secrets Necessários
+No repositório GitHub (`Settings` -> `Secrets and variables` -> `Actions`), cadastre:
+- `DATABASE_URL`: Connection string do pooler do Neon PostgreSQL 18.
+- `DATABASE_URL_ASYNC`: String asyncpg do Neon (`postgresql+asyncpg://...`).
+- `REDIS_URL`: URL do Redis Cloud / Upstash (`rediss://...`).
+
