@@ -1,4 +1,5 @@
-"""Mecanismo de persistência raw (Bronze Layer) no PostgreSQL/TimescaleDB."""
+"""Mecanismo de persistência raw (Bronze Layer) no PostgreSQL/TimescaleDB.
+Totalmente aderente ao DDL canônico de raw.ingestion_batch e raw.payload."""
 
 import hashlib
 import json
@@ -15,7 +16,7 @@ logger = structlog.get_logger(__name__)
 
 
 class RawSink:
-    """Grava payloads brutos na tabela raw.payload com idempotência via hash SHA-256."""
+    """Grava payloads brutos em raw.payload vinculado a um lote em raw.ingestion_batch com hash SHA-256."""
 
     def __init__(self, db_url: str | None = None) -> None:
         self.db_url = db_url or settings.database_url_async.replace("postgresql+asyncpg://", "postgresql://")
@@ -30,6 +31,50 @@ class RawSink:
         if self._pool:
             await self._pool.close()
 
+    async def create_batch(
+        self,
+        collector_name: str,
+        collector_version: str = "1.0.0",
+        source_id: uuid.UUID | None = None,
+        notes: str | None = None,
+    ) -> uuid.UUID:
+        """Cria um lote de ingestão em raw.ingestion_batch com status RUNNING."""
+        batch_id = uuid.uuid4()
+        query = """
+        INSERT INTO raw.ingestion_batch (
+            batch_id, source_id, collector_name, collector_version,
+            started_at, status, request_count, error_count, notes
+        )
+        VALUES ($1, $2, $3, $4, NOW(), 'RUNNING', 0, 0, $5)
+        RETURNING batch_id;
+        """
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(query, batch_id, source_id, collector_name, collector_version, notes)
+        return batch_id
+
+    async def finish_batch(
+        self,
+        batch_id: uuid.UUID,
+        status: str = "SUCCEEDED",
+        request_count: int = 0,
+        error_count: int = 0,
+        notes: str | None = None,
+    ) -> None:
+        """Finaliza o lote de ingestão com contadores e status final."""
+        query = """
+        UPDATE raw.ingestion_batch
+        SET status = $2,
+            finished_at = NOW(),
+            request_count = $3,
+            error_count = $4,
+            notes = COALESCE($5, notes)
+        WHERE batch_id = $1;
+        """
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(query, batch_id, status, request_count, error_count, notes)
+
     async def save_payload(
         self,
         source: str,
@@ -37,54 +82,70 @@ class RawSink:
         payload: Any,
         status_code: int = 200,
         metadata: dict[str, Any] | None = None,
+        batch_id: uuid.UUID | None = None,
+        mime_type: str = "application/json",
+        encoding: str = "utf-8",
     ) -> str:
-        """Salva um payload bruto no schema raw. Retorna o ID gerado ou o hash de idempotência."""
+        """Salva um payload bruto no schema raw. Aderente ao DDL oficial de raw.payload."""
         if not settings.enable_raw_landing:
             return "raw_landing_disabled"
 
-        payload_bytes = json.dumps(payload, default=str, sort_keys=True).encode("utf-8")
+        if isinstance(payload, bytes):
+            payload_bytes = payload
+        elif isinstance(payload, str):
+            payload_bytes = payload.encode(encoding)
+        else:
+            payload_bytes = json.dumps(payload, default=str, sort_keys=True).encode(encoding)
+
         payload_hash = hashlib.sha256(payload_bytes).hexdigest()
-        now = datetime.now(timezone.utc)
-        record_id = str(uuid.uuid4())
+        source_url = f"{source}://{endpoint}"
+        meta = metadata or {}
+        meta["source"] = source
+        meta["endpoint"] = endpoint
 
-        query = """
-        INSERT INTO raw.payload (
-            id, source, endpoint, payload, payload_hash, http_status, metadata, captured_at
-        )
-        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8)
-        ON CONFLICT (source, endpoint, payload_hash) DO UPDATE
-        SET captured_at = EXCLUDED.captured_at,
-            http_status = EXCLUDED.http_status
-        RETURNING id;
-        """
-
-        try:
-            pool = await self.get_pool()
-            async with pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    query,
-                    record_id,
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            # Garante que um lote existe para satisfazer a FK payload_batch_id_fkey
+            effective_batch_id = batch_id
+            if effective_batch_id is None:
+                effective_batch_id = await conn.fetchval(
+                    """
+                    INSERT INTO raw.ingestion_batch (
+                        batch_id, collector_name, collector_version, started_at, status, request_count, error_count, notes
+                    )
+                    VALUES (gen_random_uuid(), $1, '1.0.0', NOW(), 'SUCCEEDED', 1, 0, 'Auto-generated single payload batch')
+                    RETURNING batch_id;
+                    """,
                     source,
-                    endpoint,
-                    json.dumps(payload, default=str),
-                    payload_hash,
-                    status_code,
-                    json.dumps(metadata or {}, default=str),
-                    now,
                 )
-                saved_id = str(row["id"]) if row else record_id
-                logger.debug(
-                    "Raw payload persistido com sucesso",
-                    source=source,
-                    endpoint=endpoint,
-                    id=saved_id,
-                )
-                return saved_id
-        except Exception as e:
-            # Em desenvolvimento local sem banco ativo, loga e continua sem quebrar o pipeline
-            logger.warning(
-                "Falha ao persistir em raw.payload (prosseguindo em memória)",
-                source=source,
-                error=str(e),
+
+            query = """
+            INSERT INTO raw.payload (
+                payload_id, batch_id, source_url, captured_at,
+                http_status, mime_type, content_sha256, encoding, body, metadata
             )
-            return record_id
+            VALUES (gen_random_uuid(), $1, $2, NOW(), $3, $4, $5, $6, $7, $8::jsonb)
+            ON CONFLICT (batch_id, content_sha256) DO NOTHING
+            RETURNING payload_id;
+            """
+            row = await conn.fetchrow(
+                query,
+                effective_batch_id,
+                source_url,
+                status_code,
+                mime_type,
+                payload_hash,
+                encoding,
+                payload_bytes,
+                json.dumps(meta, default=str),
+            )
+            saved_id = str(row["payload_id"]) if row else "duplicate_skipped"
+            logger.debug(
+                "Raw payload persistido no DDL canônico",
+                source=source,
+                endpoint=endpoint,
+                id=saved_id,
+                sha256=payload_hash,
+            )
+            return saved_id
+

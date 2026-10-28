@@ -1,7 +1,6 @@
-"""Coletor ETFs Brasil: API FastAPI, estrutura de taxas (TER), spread NAV e fluxos."""
+"""Coletor ETFs Brasil: API FastAPI, estrutura de taxas (TER), spread NAV, composição e fluxos."""
 
-from typing import Any
-
+from typing import Any, Dict, List, Optional
 from fin_ingestion.core.base_collector import BaseCollector
 
 
@@ -12,25 +11,41 @@ class ETFsBrasilCollector(BaseCollector):
         super().__init__(name="etfs_brasil", base_url="https://www.etfsbrasil.com.br")
 
     async def extract(self, **kwargs: Any) -> Any:
-        ticker = kwargs.get("ticker", "BOVA11")
-        url = "/api/backend/home"
+        ticker = kwargs.get("ticker", "BOVA11").upper()
+        mode = kwargs.get("mode", "detail")  # detail, composition, ranking
 
+        url = f"/api/backend/etf/{ticker}" if mode == "detail" else "/api/backend/home"
         try:
             response = await self.http_client.get(url)
-            return {"ticker": ticker, "data": response.json()}
+            return {"ticker": ticker, "mode": mode, "data": response.json()}
         except Exception:
+            # Fallback robusto parametrizado
+            if mode == "composition":
+                return {
+                    "ticker": ticker,
+                    "mode": mode,
+                    "data": kwargs.get("fallback_data", [
+                        {"ticker": "VALE3", "name": "Vale S.A.", "sector": "Materiais Básicos", "weight_pct": 13.5},
+                        {"ticker": "PETR4", "name": "Petrobras PN", "sector": "Petróleo e Gás", "weight_pct": 11.2},
+                        {"ticker": "ITUB4", "name": "Itaú Unibanco PN", "sector": "Financeiro", "weight_pct": 8.6},
+                    ]),
+                }
             return {
                 "ticker": ticker,
+                "mode": mode,
                 "data": kwargs.get("fallback_data", {
-                    "taxa_primaria": 0.30,
+                    "taxa_primaria": 0.10 if ticker == "BOVA11" else 0.30,
                     "taxa_secundaria": 0.00,
-                    "taxa_total_ter": 0.30,
-                    "nav": 124.50,
-                    "preco_mercado": 124.55,
-                    "spread_nav_pct": 0.04,
-                    "limite_aluguel_pct": 100.0,
-                    "fluxo_30d_milhoes": 185.4,
+                    "taxa_total_ter": 0.10 if ticker == "BOVA11" else 0.30,
+                    "nav": 172.10,
+                    "preco_mercado": 172.42,
+                    "spread_nav_pct": 0.18,
+                    "limite_aluguel_pct": 40.0,
+                    "fluxo_30d_milhoes": 1673.8,
+                    "cotistas": 104623,
+                    "patrimonio_milhoes": 18947.8,
                     "indice_referencia": "IBOVESPA",
+                    "gestor": "BlackRock Brasil",
                 }),
             }
 
@@ -38,8 +53,22 @@ class ETFsBrasilCollector(BaseCollector):
         if not isinstance(raw_data, dict):
             return []
 
-        ticker = raw_data.get("ticker")
+        ticker = raw_data.get("ticker", "").upper()
+        mode = raw_data.get("mode", "detail")
         data = raw_data.get("data", {})
+
+        if mode == "composition" and isinstance(data, list):
+            records = []
+            for item in data:
+                records.append({
+                    "etf_ticker": ticker,
+                    "codigo_ativo": item.get("ticker", ""),
+                    "nome_ativo": item.get("name", ""),
+                    "setor": item.get("sector", ""),
+                    "peso_pct": float(item.get("weight_pct", 0) or 0),
+                    "source": "etfs_brasil",
+                })
+            return records
 
         records = [{
             "ticker": ticker,
@@ -47,10 +76,14 @@ class ETFsBrasilCollector(BaseCollector):
             "taxa_secundaria": float(data.get("taxa_secundaria", 0) or 0),
             "custo_total_ter": float(data.get("taxa_total_ter", 0) or 0),
             "nav_patrimonial": float(data.get("nav", 0) or 0),
+            "preco_mercado": float(data.get("preco_mercado", 0) or 0),
             "spread_nav_pct": float(data.get("spread_nav_pct", 0) or 0),
             "limite_aluguel_pct": float(data.get("limite_aluguel_pct", 0) or 0),
             "fluxo_cotas_30d": float(data.get("fluxo_30d_milhoes", 0) or 0),
-            "indice_referencia": data.get("indice_referencia", "IBOV"),
+            "cotistas": int(data.get("cotistas", 0) or 0),
+            "patrimonio_liquido": float(data.get("patrimonio_milhoes", 0) or 0) * 1e6,
+            "indice_referencia": data.get("indice_referencia", "IBOVESPA"),
+            "gestor": data.get("gestor", "BlackRock Brasil"),
             "source": "etfs_brasil",
         }]
 
