@@ -45,13 +45,34 @@ class DailyMarketPipeline:
         status_results = await asyncio.gather(*status_tasks, return_exceptions=True)
         advfn_results = await asyncio.gather(*advfn_tasks, return_exceptions=True)
 
+        quotes_to_persist = []
         for t, res in zip(target_tickers, status_results):
             if isinstance(res, CollectorResult):
                 results[f"status_invest_{t}"] = res
+                for r in res.data:
+                    dt = r.get("data_referencia")
+                    val = r.get("valor")
+                    if dt and val is not None:
+                        quotes_to_persist.append({
+                            "ticker": t,
+                            "data_pregao": dt,
+                            "preco_fechamento": val,
+                            "preco_abertura": val,
+                            "preco_maximo": val,
+                            "preco_minimo": val,
+                            "volume_total": 0,
+                            "quantidade_negocios": 0,
+                        })
 
         for t, res in zip(target_tickers, advfn_results):
             if isinstance(res, CollectorResult):
                 results[f"advfn_{t}"] = res
+
+        # 4. Gravação idempotente das cotações no DW (market.cotacao_diaria)
+        written_quotes = 0
+        if quotes_to_persist:
+            written_quotes = await self.dw_writer.write_daily_quotes(quotes_to_persist)
+            logger.info("Cotações persistidas com sucesso pelo DailyMarketPipeline", written=written_quotes)
 
         # Fechamento de clientes
         await self.b3.close()
@@ -60,11 +81,12 @@ class DailyMarketPipeline:
         await self.advfn.close()
         await self.dw_writer.close()
 
-        total_records = sum(r.records_count for r in results.values())
-        logger.info("Pipeline diário finalizado com sucesso", total_records=total_records)
+        total_records = sum(r.records_count for r in results.values()) + written_quotes
+        logger.info("Pipeline diário finalizado com sucesso", total_records=total_records, quotes_written=written_quotes)
 
         return {
             "pipeline": "daily_market",
             "total_records": total_records,
+            "quotes_written": written_quotes,
             "sources_executed": list(results.keys()),
         }
