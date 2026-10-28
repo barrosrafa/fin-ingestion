@@ -6,8 +6,14 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Seg-Sex no fechamento de pregão consolidado (18:30 BRT = 21:30 UTC)
-    - cron: '30 21 * * 1-5'
+    # Seg-Sex CVM Descoberta de Demonstrativos ITR/DFP (06:00 BRT = 09:00 UTC)
+    - cron: '0 9 * * 1-5'
+    # Seg-Sex FIIs Informes & Eventos (12:00 BRT = 15:00 UTC)
+    - cron: '0 15 * * 1-5'
+    # Seg-Sex BCB Macroeconomia SGS & PTAX (18:00 BRT = 21:00 UTC)
+    - cron: '0 21 * * 1-5'
+    # Seg-Sex no fechamento de pregão consolidado B3 (19:30 BRT = 22:30 UTC)
+    - cron: '30 22 * * 1-5'
     # Domingo à noite para reconciliação e enriquecimento cadastral (20:00 BRT = 23:00 UTC)
     - cron: '0 23 * * 0'
   workflow_dispatch:
@@ -18,6 +24,9 @@ on:
         type: choice
         options:
           - 'daily_market'
+          - 'quarterly_cvm'
+          - 'monthly_fii'
+          - 'macro_bcb'
           - 'queue_reconcile'
           - 'queue_status'
           - 'enrich_metadata'
@@ -95,6 +104,15 @@ jobs:
                 [ -n "${{ github.event.inputs.tickers }}" ] && TICKERS_ARG="--tickers ${{ github.event.inputs.tickers }}"
                 uv run fin-ingestion collect --pipeline daily $TICKERS_ARG
                 ;;
+              quarterly_cvm)
+                uv run fin-ingestion collect --pipeline quarterly
+                ;;
+              monthly_fii)
+                uv run fin-ingestion collect --pipeline monthly
+                ;;
+              macro_bcb)
+                uv run fin-ingestion collect --pipeline macro
+                ;;
               queue_reconcile)
                 uv run fin-ingestion queue-reconcile
                 ;;
@@ -111,10 +129,19 @@ jobs:
                 uv run fin-ingestion test-sources
                 ;;
             esac
-          elif [ "$CRON_TRIGGER" = "30 21 * * 1-5" ]; then
-            echo "Executando fechamento diário de mercado (Seg-Sex)"
+          elif [ "$CRON_TRIGGER" = "30 22 * * 1-5" ] || [ "$CRON_TRIGGER" = "30 21 * * 1-5" ]; then
+            echo "Executando fechamento diário de mercado B3 (Seg-Sex)"
             uv run fin-ingestion collect --pipeline daily
             uv run fin-ingestion compute-analytics
+          elif [ "$CRON_TRIGGER" = "0 9 * * 1-5" ]; then
+            echo "Executando descoberta diária de demonstrativos CVM (Seg-Sex)"
+            uv run fin-ingestion collect --pipeline quarterly
+          elif [ "$CRON_TRIGGER" = "0 15 * * 1-5" ]; then
+            echo "Executando coleta de informes e eventos de FIIs (Seg-Sex)"
+            uv run fin-ingestion collect --pipeline monthly
+          elif [ "$CRON_TRIGGER" = "0 21 * * 1-5" ]; then
+            echo "Executando macroeconomia BCB e PTAX (Seg-Sex)"
+            uv run fin-ingestion collect --pipeline macro
           elif [ "$CRON_TRIGGER" = "0 23 * * 0" ]; then
             echo "Executando reconciliação semanal e enriquecimento cadastral (Domingo)"
             uv run fin-ingestion queue-reconcile

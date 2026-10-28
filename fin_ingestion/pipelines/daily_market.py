@@ -25,36 +25,56 @@ class DailyMarketPipeline:
         self.advfn = ADVFNCollector()
         self.dw_writer = DWWriter()
 
-    async def get_active_universe(self, limit: int = 50, offset: int = 0) -> list[str]:
+    async def get_active_universe(self, limit: int | None = None, offset: int = 0) -> list[str]:
         """Consulta o universo ativo cadastrado no banco, com ordenação por liquidez e paginação."""
         try:
             pool = await self.dw_writer.get_pool()
             async with pool.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT ticker FROM core.ativo
-                    WHERE ticker IS NOT NULL
-                      AND tipo_ativo IN ('ACAO', 'FII', 'ETF', 'BDR')
-                    ORDER BY volume_medio DESC NULLS LAST, ticker ASC
-                    LIMIT $1 OFFSET $2;
-                    """,
-                    limit,
-                    offset,
-                )
+                if limit is None or limit <= 0:
+                    rows = await conn.fetch(
+                        """
+                        SELECT ticker FROM core.ativo
+                        WHERE ticker IS NOT NULL
+                          AND tipo_ativo IN ('ACAO', 'FII', 'ETF', 'BDR')
+                        ORDER BY volume_medio DESC NULLS LAST, ticker ASC;
+                        """
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT ticker FROM core.ativo
+                        WHERE ticker IS NOT NULL
+                          AND tipo_ativo IN ('ACAO', 'FII', 'ETF', 'BDR')
+                        ORDER BY volume_medio DESC NULLS LAST, ticker ASC
+                        LIMIT $1 OFFSET $2;
+                        """,
+                        limit,
+                        offset,
+                    )
                 if rows:
                     return [r["ticker"] for r in rows]
         except Exception as e:
-            logger.warning("Falha ao carregar universo ativo do banco; usando ativos base", error=str(e))
-        return ["PETR4", "VALE3", "ITUB4", "BBDC4", "BBAS3"]
+            logger.warning("Falha ao carregar universo ativo do banco de dados", error=str(e))
+        return []
 
     async def run(
         self,
         tickers: list[str] | None = None,
-        limit: int = 50,
+        limit: int | None = None,
         offset: int = 0,
+        concurrency: int = 10,
     ) -> dict[str, Any]:
         target_tickers = tickers or await self.get_active_universe(limit=limit, offset=offset)
-        logger.info("Iniciando pipeline diário de mercado", tickers=target_tickers, count=len(target_tickers))
+        if not target_tickers:
+            logger.warning("Nenhum ticker ativo disponível para processamento no pipeline diário.")
+            return {
+                "pipeline": "daily_market",
+                "total_records": 0,
+                "quotes_written": 0,
+                "intraday_observations": 0,
+                "sources_executed": [],
+            }
+        logger.info("Iniciando pipeline diário de mercado", tickers_count=len(target_tickers))
 
         results: dict[str, CollectorResult] = {}
 
