@@ -66,14 +66,7 @@ class DailyMarketPipeline:
     ) -> dict[str, Any]:
         target_tickers = tickers or await self.get_active_universe(limit=limit, offset=offset)
         if not target_tickers:
-            logger.warning("Nenhum ticker ativo disponível para processamento no pipeline diário.")
-            return {
-                "pipeline": "daily_market",
-                "total_records": 0,
-                "quotes_written": 0,
-                "intraday_observations": 0,
-                "sources_executed": [],
-            }
+            raise RuntimeError("Nenhum ticker ativo disponível para o fechamento diário")
         logger.info("Iniciando pipeline diário de mercado", tickers_count=len(target_tickers))
 
         results: dict[str, CollectorResult] = {}
@@ -138,6 +131,40 @@ class DailyMarketPipeline:
             written_quotes = await self.dw_writer.write_daily_quotes(quotes_to_persist)
             logger.info("Cotações persistidas com sucesso pelo DailyMarketPipeline", written=written_quotes)
 
+        # Uma observação pontual bloqueada não pode impedir a cotação OHLC pública.
+        quoted = {q["ticker"] for q in quotes_to_persist}
+        missing = [t for t in target_tickers if t not in quoted]
+        fallback_failed = []
+        if missing:
+            from fin_ingestion.pipelines.historical_backfill import HistoricalBackfillPipeline
+            history = HistoricalBackfillPipeline(concurrency=8)
+            try:
+                pool = await history.get_pool()
+                async with pool.acquire() as conn:
+                    assets = await conn.fetch(
+                        "SELECT id_ativo,ticker,tipo_ativo::text AS tipo_ativo FROM core.ativo WHERE ticker=ANY($1::text[])", missing,
+                    )
+                sem = asyncio.Semaphore(8)
+
+                async def load_quote(asset):
+                    async with sem:
+                        parsed = await history.fetch_complete_history(asset["ticker"], asset["tipo_ativo"], days=10)
+                        if not parsed.get("success") or not parsed.get("candles"):
+                            return asset["ticker"], 0
+                        counts = await history.persist_asset_history(dict(asset), parsed)
+                        return asset["ticker"], counts["quotes_written"]
+
+                fallback_results = await asyncio.gather(*(load_quote(a) for a in assets), return_exceptions=True)
+                for asset, result in zip(assets, fallback_results):
+                    if isinstance(result, Exception) or not result[1]:
+                        fallback_failed.append(asset["ticker"])
+                        logger.warning("Cotação indisponível", ticker=asset["ticker"], error=str(result))
+                    else:
+                        written_quotes += result[1]
+                fallback_failed.extend(set(missing) - {a["ticker"] for a in assets})
+            finally:
+                await history.close()
+
         # Fechamento de clientes
         await self.b3.close()
         await self.bcb.close()
@@ -145,11 +172,16 @@ class DailyMarketPipeline:
         await self.advfn.close()
         await self.dw_writer.close()
 
+        if not written_quotes:
+            raise RuntimeError("Fechamento diário sem cotações persistidas")
         total_records = sum(r.records_count for r in results.values()) + written_quotes
         logger.info("Pipeline diário finalizado com sucesso", total_records=total_records, quotes_written=written_quotes)
 
         return {
             "pipeline": "daily_market",
+            "failed_tickers": fallback_failed,
+            "failed_sources": {name: r.errors for name, r in results.items() if not r.success},
+            "status": "PARTIAL" if fallback_failed else "SUCCEEDED",
             "total_records": total_records,
             "quotes_written": written_quotes,
             "intraday_observations": intraday_observations_written,

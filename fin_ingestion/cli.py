@@ -273,6 +273,7 @@ def dbt_run(
 
     cmd = ["dbt", "run", "--select", models, "--project-dir", settings.dbt_project_dir, "--profiles-dir", settings.dbt_profiles_dir, "--target", settings.dbt_target]
     try:
+        subprocess.run(["dbt", "deps", "--project-dir", settings.dbt_project_dir, "--profiles-dir", settings.dbt_profiles_dir], env=env, check=True)
         subprocess.run(cmd, env=env, check=True)
     except FileNotFoundError:
         console.print("[bold red]dbt não encontrado no PATH.[/bold red]")

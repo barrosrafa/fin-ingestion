@@ -60,3 +60,18 @@ def test_no_data_is_failure():
     from fin_ingestion.pipelines.result import summarize_results
     with pytest.raises(RuntimeError,match='nenhuma linha'):
         summarize_results('test', {'broken':CollectorResult(source='test',success=False,records_count=0,errors=['db unavailable'])})
+
+@pytest.mark.asyncio
+async def test_daily_cannot_succeed_without_quotes():
+    from fin_ingestion.pipelines.daily_market import DailyMarketPipeline
+    p = DailyMarketPipeline()
+    p.get_active_universe = AsyncMock(return_value=[])
+    with pytest.raises(RuntimeError, match='ticker'):
+        await p.run()
+
+
+def test_dbt_installs_dependencies_before_running():
+    with patch('fin_ingestion.cli.subprocess.run') as run:
+        assert CliRunner().invoke(app, ['dbt-run']).exit_code == 0
+        assert run.call_args_list[0].args[0][1] == 'deps'
+        assert run.call_args_list[1].args[0][1] == 'run'

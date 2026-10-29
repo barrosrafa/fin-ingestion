@@ -178,10 +178,12 @@ class HistoricalBackfillPipeline:
             "splits": split_records,
         }
 
-    async def fetch_complete_history(self, ticker: str, tipo_ativo: str) -> dict[str, Any]:
+    async def fetch_complete_history(self, ticker: str, tipo_ativo: str, days: int | None = None) -> dict[str, Any]:
         """Consulta série histórica completa de 30 anos (period1=0 até agora)."""
         symbol = f"{ticker}.SA" if not ticker.startswith("^") and "." not in ticker else ticker
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?period1=0&period2=1800000000&interval=1d&events=div%7Csplit"
+        now = datetime.now(timezone.utc)
+        start = int((now - timedelta(days=days)).timestamp()) if days else 0
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?period1={start}&period2={int(now.timestamp())}&interval=1d&events=div%7Csplit"
 
         client = await self.get_http_client()
         try:
