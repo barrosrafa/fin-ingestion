@@ -60,3 +60,30 @@ def test_csv_reading_stock_and_fii(tmp_path):
 async def test_enrichment_worker_handles_missing_cnpj():
     # Garante que enriquecimento não gera CNPJ sintético falso
     assert not hasattr(AssetMetadataEnricher, "_synthetic_cnpj_for_ticker")
+
+
+@pytest.mark.asyncio
+async def test_csv_prices_are_observations_not_official_daily_closes(tmp_path):
+    from unittest.mock import AsyncMock, MagicMock
+    csv = tmp_path / "snapshot.csv"
+    csv.write_text("TICKER;PRECO;DY;P/L;P/VP\nQA0003;12,34;0;0;0\n", encoding="utf-8")
+    connection = MagicMock()
+    connection.executemany = AsyncMock()
+    connection.fetch = AsyncMock(return_value=[{"ticker": "QA0003", "id_ativo": 1}])
+    transaction = MagicMock()
+    transaction.__aenter__ = AsyncMock()
+    transaction.__aexit__ = AsyncMock(return_value=False)
+    connection.transaction.return_value = transaction
+    acquired = MagicMock()
+    acquired.__aenter__ = AsyncMock(return_value=connection)
+    acquired.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = acquired
+    etl = StatusInvestETL(db_url="postgresql://localhost/qa")
+    etl.get_pool = AsyncMock(return_value=pool)
+    assert await etl.ingest_stocks(csv) == 1
+    writes = [call.args for call in connection.executemany.await_args_list]
+    observation = next((sql, records) for sql, records in writes if "market.cotacao_intraday" in sql)
+    assert not any("INSERT INTO market.cotacao_diaria" in sql for sql, _ in writes)
+    assert observation[1][0] == (1, etl.observed_at, Decimal("12.34"), None, None)
+    assert etl.observed_at.tzinfo is not None

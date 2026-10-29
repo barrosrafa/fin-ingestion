@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import csv
 import ssl
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -69,6 +69,7 @@ class StatusInvestETL:
         self.db_url = db_url or settings.database_url_async.replace("postgresql+asyncpg://", "postgresql://")
         self.batch_size = max(50, min(batch_size, 300))  # entre 100 e 200 sugerido
         self.reference_date = reference_date or date(2026, 10, 26)
+        self.observed_at = datetime.now(timezone.utc)
         self._pool: asyncpg.Pool | None = None
 
     async def get_pool(self) -> asyncpg.Pool:
@@ -160,7 +161,7 @@ class StatusInvestETL:
                     )
                     ticker_to_id = {r["ticker"]: r["id_ativo"] for r in id_rows}
 
-                    # 3. Upsert em market.cotacao_diaria
+                    # 3. Store observed CSV prices separately from official EOD closes
                     cotacao_records = []
                     # 4. Upsert em analytics.indicador_fundamentalista
                     indicador_records = []
@@ -176,12 +177,10 @@ class StatusInvestETL:
 
                         cotacao_records.append((
                             id_ativo,
-                            self.reference_date,
+                            self.observed_at,
                             preco,
-                            preco,  # preco_medio
-                            volume,
-                            None,   # patrimonio_liquido_fundo
-                            None,   # numero_cotistas_fundo
+                            None,  # No reported variation in the CSV.
+                            volume
                         ))
 
                         indicador_records.append((
@@ -219,14 +218,9 @@ class StatusInvestETL:
                     # Persistência de cotações em lote
                     await conn.executemany(
                         """
-                        INSERT INTO market.cotacao_diaria (
-                            id_ativo, data_pregao, preco_fechamento, preco_medio, volume_total,
-                            patrimonio_liquido_fundo, numero_cotistas_fundo
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        ON CONFLICT (id_ativo, data_pregao) DO UPDATE SET
-                            preco_fechamento = EXCLUDED.preco_fechamento,
-                            preco_medio = COALESCE(EXCLUDED.preco_medio, market.cotacao_diaria.preco_medio),
-                            volume_total = EXCLUDED.volume_total;
+                        INSERT INTO market.cotacao_intraday (
+                            id_ativo, timestamp, preco_atual, variacao, volume
+                        ) VALUES ($1, $2, $3, $4, $5);
                         """,
                         cotacao_records,
                     )
@@ -356,12 +350,10 @@ class StatusInvestETL:
 
                         cotacao_records.append((
                             id_ativo,
-                            self.reference_date,
+                            self.observed_at,
                             preco,
-                            preco,
+                            None,
                             liq_diaria,
-                            patrimonio,
-                            n_cotistas,
                         ))
 
                         detalhe_fii_records.append((
@@ -397,19 +389,12 @@ class StatusInvestETL:
                             patrimonio, # valor_mercado
                         ))
 
-                    # Persistência de Cotações Diárias
+                    # Persistência de observações de preço (não são fechamentos oficiais)
                     await conn.executemany(
                         """
-                        INSERT INTO market.cotacao_diaria (
-                            id_ativo, data_pregao, preco_fechamento, preco_medio, volume_total,
-                            patrimonio_liquido_fundo, numero_cotistas_fundo
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        ON CONFLICT (id_ativo, data_pregao) DO UPDATE SET
-                            preco_fechamento = EXCLUDED.preco_fechamento,
-                            preco_medio = COALESCE(EXCLUDED.preco_medio, market.cotacao_diaria.preco_medio),
-                            volume_total = EXCLUDED.volume_total,
-                            patrimonio_liquido_fundo = COALESCE(EXCLUDED.patrimonio_liquido_fundo, market.cotacao_diaria.patrimonio_liquido_fundo),
-                            numero_cotistas_fundo = COALESCE(EXCLUDED.numero_cotistas_fundo, market.cotacao_diaria.numero_cotistas_fundo);
+                        INSERT INTO market.cotacao_intraday (
+                            id_ativo, timestamp, preco_atual, variacao, volume
+                        ) VALUES ($1, $2, $3, $4, $5);
                         """,
                         cotacao_records,
                     )

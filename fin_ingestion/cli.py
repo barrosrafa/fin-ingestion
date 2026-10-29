@@ -1,7 +1,9 @@
 """CLI unificada para orquestração de ingestão, cálculos analíticos e dbt."""
 
 import asyncio
+import os
 import subprocess
+import urllib.parse
 from typing import Annotated
 
 import structlog
@@ -257,9 +259,21 @@ def dbt_run(
 ) -> None:
     """Invoca o motor de transformação dbt."""
     console.print(f"[bold green]▶️ Executando 'dbt run --select {models}'...[/bold green]")
+    env = os.environ.copy()
+    if settings.database_url:
+        import urllib.parse
+        parsed = urllib.parse.urlparse(settings.database_url)
+        env.setdefault("DBT_HOST", parsed.hostname or "localhost")
+        env.setdefault("DBT_USER", parsed.username or "postgres")
+        env.setdefault("DBT_PASSWORD", parsed.password or "")
+        env.setdefault("DBT_PORT", str(parsed.port or 5432))
+        env.setdefault("DBT_DBNAME", parsed.path.lstrip("/") or "neondb")
+        qs = urllib.parse.parse_qs(parsed.query)
+        env.setdefault("DBT_SSLMODE", qs.get("sslmode", ["require"])[0])
+
     cmd = ["dbt", "run", "--select", models, "--project-dir", settings.dbt_project_dir, "--profiles-dir", settings.dbt_profiles_dir]
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, env=env, check=True)
     except FileNotFoundError:
         console.print("[bold yellow]dbt-core não instalado no path global. Instale via 'uv sync' ou 'pip install dbt-postgres'.[/bold yellow]")
     except Exception as e:

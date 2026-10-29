@@ -2,7 +2,6 @@ version: 2
 
 sources:
   - name: raw
-    database: fin
     schema: raw
     tables:
       - name: b3_cothist
@@ -21,6 +20,11 @@ sources:
       - name: brick360_scores
       - name: advfn_tecnico
       - name: etfs_brasil_taxas
+  - name: core
+    schema: core
+    tables:
+      - name: emissor_companhia
+      - name: ativo
 
 models:
   - name: stg_b3_cotacoes
