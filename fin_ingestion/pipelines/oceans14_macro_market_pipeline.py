@@ -17,6 +17,17 @@ class Oceans14MacroMarketPipeline:
         self.bcb = BCBCollector()
         self.b3 = B3Collector()
 
+    async def run(self, tickers: list[str] | None = None) -> dict[str, Any]:
+        from fin_ingestion.pipelines.result import summarize_results
+        results = {}
+        try:
+            for key in self.bcb.SERIES_MAP:
+                results[key] = await self.bcb.run(serie=key, ultimos=12)
+            return summarize_results("macro_market", results)
+        finally:
+            await self.bcb.close()
+            await self.b3.close()
+
     async def collect_macro_credit_indicators(self, ultimos: int = 12) -> dict[str, list[dict[str, Any]]]:
         """Coleta séries temporais do Bacen SGS para crédito, poupança, contas públicas e TCR."""
         series_keys = [

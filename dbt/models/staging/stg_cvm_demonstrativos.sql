@@ -4,15 +4,15 @@
 with source as (
     select
         trim(cnpj_cia)::text as cnpj,
-        trim(cd_cvm)::text as codigo_cvm,
-        trim(denom_cia)::text as denominacao_social,
-        dt_refer::date as data_referencia,
+        trim(dados_brutos->>'CD_CVM')::text as codigo_cvm,
+        trim(dados_brutos->>'DENOM_CIA')::text as denominacao_social,
+        data_referencia::date as data_referencia,
         versao::integer as versao_documento,
-        grupo_dfp::text as demonstrativo_tipo, -- DRE, BPA, BPP, DFC_MD
-        trim(cd_conta)::text as codigo_conta,
-        trim(ds_conta)::text as descricao_conta,
-        vl_conta::numeric(20,4) as valor_conta,
-        ordem_exerc::text as ordem_exercicio -- ULTIMO, PENULTIMO
+        tipo_demonstrativo::text as demonstrativo_tipo, -- DRE, BPA, BPP, DFC_MD
+        trim(conta)::text as codigo_conta,
+        trim(descricao_conta)::text as descricao_conta,
+        valor_conta::numeric(20,4) as valor_conta,
+        (dados_brutos->>'ORDEM_EXERC')::text as ordem_exercicio -- ULTIMO, PENULTIMO
     from {{ source('raw', 'cvm_demonstrativos') }}
 )
 

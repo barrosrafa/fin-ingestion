@@ -1,5 +1,7 @@
 """Coletor oficial B3: Cotações Históricas (COTAHIST), Instrumentos e Índices."""
 
+import base64
+import json
 from datetime import datetime
 from typing import Any
 
@@ -17,19 +19,16 @@ class B3Collector(BaseCollector):
         index_name = kwargs.get("index", "IBOV")
 
         if endpoint == "index_portfolio":
-            url = f"/indexProxy/indexCall/GetPortfolioDay/{index_name}"
-            try:
-                response = await self.http_client.get(url)
-                return response.json()
-            except Exception:
-                # Fallback para os 5 maiores componentes do IBOV
-                return {
-                    "results": [
-                        {"codAtivo": "VALE3", "acao": "VALE", "tipo": "ON", "qtdeTeorica": "885.600.000", "partPct": "12,45"},
-                        {"codAtivo": "PETR4", "acao": "PETROBRAS", "tipo": "PN", "qtdeTeorica": "4.560.000.000", "partPct": "10,20"},
-                        {"codAtivo": "ITUB4", "acao": "ITAUUNIBANCO", "tipo": "PN", "qtdeTeorica": "4.800.000.000", "partPct": "8,15"},
-                    ]
-                }
+            encoded = base64.b64encode(json.dumps({
+                "language": "pt-br", "pageNumber": 1, "pageSize": 1000,
+                "index": index_name, "segment": "1",
+            }).encode()).decode()
+            response = await self.http_client.get(f"/indexProxy/indexCall/GetPortfolioDay/{encoded}")
+            response.raise_for_status()
+            payload = response.json()
+            if not payload.get("results"):
+                raise ValueError(f"Carteira vazia para o índice {index_name}")
+            return payload
         elif endpoint == "cothist_line":
             # Permite parsing direto de linhas posicionais COTAHIST
             return kwargs.get("lines", [])
@@ -41,11 +40,11 @@ class B3Collector(BaseCollector):
             records = []
             for item in raw_data["results"]:
                 records.append({
-                    "ticker": item.get("codAtivo"),
-                    "nome_empresa": item.get("acao"),
-                    "tipo_acao": item.get("tipo"),
-                    "quantidade_teorica": float(item.get("qtdeTeorica", "0").replace(".", "").replace(",", ".")),
-                    "participacao_pct": float(item.get("partPct", "0").replace(",", ".")),
+                    "ticker": item.get("codAtivo", item.get("cod")),
+                    "nome_empresa": item.get("acao", item.get("asset")),
+                    "tipo_acao": item.get("tipo", item.get("type")),
+                    "quantidade_teorica": float(item.get("qtdeTeorica", item.get("theoricalQty", "0")).replace(".", "").replace(",", ".")),
+                    "participacao_pct": float(item.get("partPct", item.get("part", "0")).replace(",", ".")),
                     "source": "b3_index_proxy",
                 })
             return records

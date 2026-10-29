@@ -1,24 +1,9 @@
--- dim_emissor.sql
--- Dimensão de emissores / companhias abertas registradas na CVM
-
-with cvm_cias as (
-    select distinct
-        cnpj,
-        codigo_cvm,
-        razao_social,
-        nome_comercial,
-        setor_atividade,
-        situacao_registro,
-        data_registro
-    from {{ source('raw', 'cvm_cad_cia') }}
-)
-
 select
-    cnpj,
-    codigo_cvm,
-    razao_social,
-    nome_comercial,
-    setor_atividade,
-    situacao_registro,
-    data_registro
-from cvm_cias
+    cnpj::text as cnpj,
+    codigo_cvm::text as codigo_cvm,
+    nome_empresarial as razao_social,
+    nome_empresarial as nome_comercial,
+    setor as setor_atividade,
+    status_cnpj::text as situacao_registro,
+    data_registro_cvm as data_registro
+from {{ source('core', 'emissor_companhia') }}

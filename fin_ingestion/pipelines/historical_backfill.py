@@ -200,6 +200,16 @@ class HistoricalBackfillPipeline:
         explicit_tickers: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Seleciona o universo de ativos de acordo com a etapa de validação."""
+        index_tickers = []
+        if stage == 1 and not explicit_tickers:
+            from fin_ingestion.collectors.official.b3 import B3Collector
+            b3 = B3Collector()
+            try:
+                for index in ("IBOV", "IFIX"):
+                    payload = await b3.extract(index=index)
+                    index_tickers.extend(r["ticker"] for r in b3.parse(payload))
+            finally:
+                await b3.close()
         pool = await self.get_pool()
         async with pool.acquire() as conn:
             if explicit_tickers:
@@ -219,10 +229,12 @@ class HistoricalBackfillPipeline:
                     SELECT id_ativo, ticker, tipo_ativo::text as tipo_ativo
                     FROM core.ativo
                     WHERE ticker IS NOT NULL
-                      AND tipo_ativo IN ('ACAO', 'FII', 'ETF')
+                      AND tipo_ativo IN ('ACAO', 'FII')
+                      AND ticker = ANY($1::text[])
                     ORDER BY volume_medio DESC NULLS LAST, ticker ASC
                     LIMIT 150;
-                    """
+                    """,
+                    index_tickers,
                 )
             else:
                 # Etapa 2: restante dos ativos (universo completo)
@@ -461,14 +473,15 @@ class HistoricalBackfillPipeline:
         total_divs = 0
         total_splits = 0
 
-        for r in results:
+        for asset, r in zip(universe, results):
             if isinstance(r, dict) and r.get("success"):
                 successful.append(r)
                 total_candles += r["candles_count"]
                 total_divs += r["divs_count"]
                 total_splits += r["splits_count"]
             else:
-                ticker_err = r.get("ticker", "UNKNOWN") if isinstance(r, dict) else str(r)
+                ticker_err = r.get("ticker", "UNKNOWN") if isinstance(r, dict) else asset["ticker"]
+                logger.error("Falha no backfill do ativo", ticker=ticker_err, error=str(r))
                 failed.append(ticker_err)
 
         logger.info(

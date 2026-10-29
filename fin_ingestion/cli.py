@@ -264,20 +264,22 @@ def dbt_run(
         import urllib.parse
         parsed = urllib.parse.urlparse(settings.database_url)
         env.setdefault("DBT_HOST", parsed.hostname or "localhost")
-        env.setdefault("DBT_USER", parsed.username or "postgres")
-        env.setdefault("DBT_PASSWORD", parsed.password or "")
+        env.setdefault("DBT_USER", urllib.parse.unquote(parsed.username or "postgres"))
+        env.setdefault("DBT_PASSWORD", urllib.parse.unquote(parsed.password or ""))
         env.setdefault("DBT_PORT", str(parsed.port or 5432))
         env.setdefault("DBT_DBNAME", parsed.path.lstrip("/") or "neondb")
         qs = urllib.parse.parse_qs(parsed.query)
         env.setdefault("DBT_SSLMODE", qs.get("sslmode", ["require"])[0])
 
-    cmd = ["dbt", "run", "--select", models, "--project-dir", settings.dbt_project_dir, "--profiles-dir", settings.dbt_profiles_dir]
+    cmd = ["dbt", "run", "--select", models, "--project-dir", settings.dbt_project_dir, "--profiles-dir", settings.dbt_profiles_dir, "--target", settings.dbt_target]
     try:
         subprocess.run(cmd, env=env, check=True)
     except FileNotFoundError:
-        console.print("[bold yellow]dbt-core não instalado no path global. Instale via 'uv sync' ou 'pip install dbt-postgres'.[/bold yellow]")
+        console.print("[bold red]dbt não encontrado no PATH.[/bold red]")
+        raise typer.Exit(code=1)
     except Exception as e:
         console.print(f"[bold red]Erro ao executar dbt:[/bold red] {e}")
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -575,6 +577,10 @@ def backfill_history(
                 str(d["splits_count"]),
             )
         console.print(d_table)
+
+    if not result["total_assets"] or result["failed_count"]:
+        console.print("[bold red]Backfill incompleto: universo vazio ou ativos com falha.[/bold red]")
+        raise typer.Exit(code=1)
 
     if result["failed_tickers"]:
         console.print(f"[bold yellow]Ativos sem dados de mercado históricos:[/bold yellow] {', '.join(result['failed_tickers'][:15])}")

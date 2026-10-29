@@ -67,7 +67,7 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     needs: [test]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 180
 
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -186,6 +186,16 @@ jobs:
             uv run fin-ingestion queue-reconcile
             uv run fin-ingestion enrich-metadata --limit 100
           fi
+
+      - name: Upload dbt diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-results-${{ github.run_id }}
+          path: |
+            dbt/target/run_results.json
+            dbt/logs/dbt.log
+          if-no-files-found: ignore
 
       - name: Execution Summary
         if: always()

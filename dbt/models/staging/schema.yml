@@ -5,6 +5,7 @@ sources:
     schema: raw
     tables:
       - name: b3_cothist
+      - name: payload
       - name: cvm_demonstrativos
       - name: bcb_sgs
       - name: anbima_mercado_secundario
@@ -25,6 +26,11 @@ sources:
     tables:
       - name: emissor_companhia
       - name: ativo
+
+  - name: market
+    schema: market
+    tables:
+      - name: cotacao_diaria
 
 models:
   - name: stg_b3_cotacoes
@@ -59,3 +65,5 @@ models:
       - name: custo_total_ter
         tests:
           - not_null
+
+  # Sources are declared above; registry records come from the canonical core schema.

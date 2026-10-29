@@ -12,6 +12,7 @@ from fin_ingestion.collectors.sites.fiis_com_br import FIISComBrCollector
 from fin_ingestion.collectors.sites.funds_explorer import FundsExplorerCollector
 from fin_ingestion.collectors.sites.mais_retorno import MaisRetornoCollector
 from fin_ingestion.core.base_collector import CollectorResult
+from fin_ingestion.pipelines.result import summarize_results
 
 logger = structlog.get_logger(__name__)
 
@@ -31,8 +32,9 @@ class MonthlyFIIFundsPipeline:
         self,
         fii_tickers: list[str] | None = None,
         etf_tickers: list[str] | None = None,
+        tickers: list[str] | None = None,
     ) -> dict[str, Any]:
-        fiis = fii_tickers or ["HGLG11", "KNIP11", "XPML11"]
+        fiis = fii_tickers or tickers or ["HGLG11", "KNIP11", "XPML11"]
         etfs = etf_tickers or ["BOVA11", "IVVB11", "SMAL11"]
 
         logger.info("Iniciando pipeline mensal de FIIs, Fundos e ETFs", fiis=fiis, etfs=etfs)
@@ -55,8 +57,7 @@ class MonthlyFIIFundsPipeline:
 
         for meta, res in zip(tasks, gathered_results):
             key = f"{meta[0]}_{meta[1]}"
-            if isinstance(res, CollectorResult):
-                results[key] = res
+            results[key] = res
 
         await self.clube_fii.close()
         await self.funds_explorer.close()
@@ -65,9 +66,4 @@ class MonthlyFIIFundsPipeline:
         await self.mais_retorno.close()
         await self.etfs_brasil.close()
 
-        total_records = sum(r.records_count for r in results.values())
-        return {
-            "pipeline": "monthly_fii_funds",
-            "total_records": total_records,
-            "sources_executed": list(results.keys()),
-        }
+        return summarize_results("monthly_fii_funds", results)

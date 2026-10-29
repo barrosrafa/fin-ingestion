@@ -10,6 +10,7 @@ from fin_ingestion.collectors.sites.fundamentei import FundamenteiCollector
 from fin_ingestion.collectors.sites.fundamentus import FundamentusCollector
 from fin_ingestion.collectors.sites.investidor10 import Investidor10Collector
 from fin_ingestion.core.base_collector import CollectorResult
+from fin_ingestion.pipelines.result import summarize_results
 
 logger = structlog.get_logger(__name__)
 
@@ -42,25 +43,17 @@ class QuarterlyFinancialsPipeline:
         fds_res = await asyncio.gather(*fundamentus_tasks, return_exceptions=True)
 
         for t, r in zip(target_tickers, inv_res):
-            if isinstance(r, CollectorResult):
-                results[f"investidor10_{t}"] = r
+            results[f"investidor10_{t}"] = r
 
         for t, r in zip(target_tickers, fnd_res):
-            if isinstance(r, CollectorResult):
-                results[f"fundamentei_{t}"] = r
+            results[f"fundamentei_{t}"] = r
 
         for t, r in zip(target_tickers, fds_res):
-            if isinstance(r, CollectorResult):
-                results[f"fundamentus_{t}"] = r
+            results[f"fundamentus_{t}"] = r
 
         await self.cvm.close()
         await self.investidor10.close()
         await self.fundamentei.close()
         await self.fundamentus.close()
 
-        total_records = sum(r.records_count for r in results.values())
-        return {
-            "pipeline": "quarterly_financials",
-            "total_records": total_records,
-            "sources_executed": list(results.keys()),
-        }
+        return summarize_results("quarterly_financials", results)
