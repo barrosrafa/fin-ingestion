@@ -1,6 +1,7 @@
 """Limitador assíncrono de taxa (Rate Limiter) baseado em token bucket."""
 
 import asyncio
+import math
 import time
 
 
@@ -8,6 +9,8 @@ class AsyncRateLimiter:
     """Controla a cadência de requisições por segundo para respeitar limites de APIs."""
 
     def __init__(self, requests_per_second: float = 2.0, burst: int = 5) -> None:
+        if not math.isfinite(requests_per_second) or requests_per_second <= 0 or burst < 1:
+            raise ValueError("Rate and burst must be positive")
         self.rate = requests_per_second
         self.capacity = burst
         self.tokens = float(burst)

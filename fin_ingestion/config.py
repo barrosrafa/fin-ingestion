@@ -27,6 +27,8 @@ class Settings(BaseSettings):
         description="URL de conexão ao Redis",
     )
 
+    distributed_source_controls: bool = Field(default=False)
+
     # Ingestion Engine Parameters
     ingestion_env: str = Field(default="development")
     log_level: str = Field(default="INFO")

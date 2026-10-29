@@ -13,6 +13,8 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - DATABASE_URL_ASYNC=${DATABASE_URL_ASYNC}
       - LOG_LEVEL=INFO
+      - REDIS_URL=${REDIS_URL:?Set REDIS_URL to the shared Redis instance}
+      - DISTRIBUTED_SOURCE_CONTROLS=true
     networks:
       - fin-network
 
@@ -27,6 +29,8 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - DATABASE_URL_ASYNC=${DATABASE_URL_ASYNC}
       - LOG_LEVEL=INFO
+      - REDIS_URL=${REDIS_URL:?Set REDIS_URL to the shared Redis instance}
+      - DISTRIBUTED_SOURCE_CONTROLS=true
     deploy:
       replicas: 2
     networks:

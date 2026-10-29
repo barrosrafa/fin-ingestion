@@ -8,6 +8,7 @@ from typing import Any
 import structlog
 
 from fin_ingestion.core.http_client import ResilientHttpClient
+from fin_ingestion.core.rate_limiter import AsyncRateLimiter
 from fin_ingestion.core.raw_sink import RawSink
 
 logger = structlog.get_logger(__name__)
@@ -42,7 +43,7 @@ class BaseCollector(ABC):
         self.http_client = ResilientHttpClient(
             name=name,
             base_url=base_url,
-            rate_limiter=None,  # default usa o limite padrão
+            rate_limiter=AsyncRateLimiter(requests_per_second=requests_per_second),
             custom_headers=custom_headers,
         )
         self.raw_sink = RawSink()

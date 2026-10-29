@@ -52,3 +52,7 @@ class CircuitBreaker:
         if self.failure_count >= self.failure_threshold:
             self.state = CircuitState.OPEN
             self.last_state_change = time.time()
+
+    def open(self) -> None:
+        self.state = CircuitState.OPEN
+        self.last_state_change = time.time()

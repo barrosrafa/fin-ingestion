@@ -2,8 +2,10 @@
 
 import random
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
+from redis.asyncio import Redis
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -11,11 +13,12 @@ from tenacity import (
     wait_random_exponential,
 )
 
+from fin_ingestion.config import settings
 from fin_ingestion.core.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerOpenException,
-    CircuitState,
 )
+from fin_ingestion.core.distributed_controls import DistributedSourceControls
 from fin_ingestion.core.rate_limiter import AsyncRateLimiter
 
 
@@ -66,6 +69,17 @@ class ResilientHttpClient:
         self.cookies = cookies or {}
         self.custom_headers = custom_headers or {}
         self._client: httpx.AsyncClient | None = None
+        self._redis = None
+        self.distributed = None
+        if settings.distributed_source_controls:
+            self._redis = Redis.from_url(settings.redis_url, socket_connect_timeout=2, socket_timeout=2)
+            # All collectors for one upstream host share protection across replicas.
+            source = urlsplit(base_url or '').netloc.lower() or name
+            self.distributed = DistributedSourceControls(
+                self._redis, source, self.rate_limiter.rate, self.rate_limiter.capacity,
+                self.circuit_breaker.failure_threshold,
+                max(self.circuit_breaker.recovery_timeout_seconds, timeout + 10),
+            )
 
     async def get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -104,6 +118,8 @@ class ResilientHttpClient:
     async def close(self) -> None:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
+        if self._redis is not None:
+            await self._redis.aclose()
 
     @retry(
         retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
@@ -117,21 +133,38 @@ class ResilientHttpClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
-        if not self.circuit_breaker.can_execute():
+        epoch = None
+        if self.distributed is not None:
+            epoch = await self.distributed.before_request()
+        elif not self.circuit_breaker.can_execute():
             raise CircuitBreakerOpenException(
                 f"Circuito aberto para {self.name}. Tentativa cancelada."
             )
 
-        await self.rate_limiter.acquire()
+        if self.distributed is None:
+            await self.rate_limiter.acquire()
         client = await self.get_client()
 
         try:
             response = await client.get(endpoint, params=params, headers=headers)
-            self._handle_response_status(response)
-            return response
-        except Exception:
-            self.circuit_breaker.record_failure()
+        except (httpx.NetworkError, httpx.TimeoutException):
+            if self.distributed is not None:
+                await self.distributed.after_request(epoch, success=False)
+            else:
+                self.circuit_breaker.record_failure()
             raise
+        blocked = response.status_code in (401, 403)
+        failed = blocked or response.status_code == 429 or response.status_code >= 500
+        if self.distributed is not None:
+            await self.distributed.after_request(epoch, success=not failed, blocked=blocked)
+        elif blocked:
+            self.circuit_breaker.open()
+        elif failed:
+            self.circuit_breaker.record_failure()
+        else:
+            self.circuit_breaker.record_success()
+        self._handle_response_status(response)
+        return response
 
     @retry(
         retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
@@ -146,39 +179,52 @@ class ResilientHttpClient:
         json: Any = None,
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
-        if not self.circuit_breaker.can_execute():
+        epoch = None
+        if self.distributed is not None:
+            epoch = await self.distributed.before_request()
+        elif not self.circuit_breaker.can_execute():
             raise CircuitBreakerOpenException(
                 f"Circuito aberto para {self.name}. Tentativa cancelada."
             )
 
-        await self.rate_limiter.acquire()
+        if self.distributed is None:
+            await self.rate_limiter.acquire()
         client = await self.get_client()
 
         try:
             response = await client.post(endpoint, data=data, json=json, headers=headers)
-            self._handle_response_status(response)
-            return response
-        except Exception:
-            self.circuit_breaker.record_failure()
+        except (httpx.NetworkError, httpx.TimeoutException):
+            if self.distributed is not None:
+                await self.distributed.after_request(epoch, success=False)
+            else:
+                self.circuit_breaker.record_failure()
             raise
+        blocked = response.status_code in (401, 403)
+        failed = blocked or response.status_code == 429 or response.status_code >= 500
+        if self.distributed is not None:
+            await self.distributed.after_request(epoch, success=not failed, blocked=blocked)
+        elif blocked:
+            self.circuit_breaker.open()
+        elif failed:
+            self.circuit_breaker.record_failure()
+        else:
+            self.circuit_breaker.record_success()
+        self._handle_response_status(response)
+        return response
 
     def _handle_response_status(self, response: httpx.Response) -> None:
         """Avalia códigos HTTP de erro e aciona circuit breaker / cooldown."""
         if response.status_code == 429:
             retry_after_hdr = response.headers.get("Retry-After")
             wait_sec = int(retry_after_hdr) if retry_after_hdr and retry_after_hdr.isdigit() else 60
-            self.circuit_breaker.record_failure()
             raise RateLimitExceededException(
                 f"Rate limit (429) excedido para {self.name}. Retry-After: {wait_sec}s.",
                 retry_after=wait_sec,
             )
         elif response.status_code in (401, 403):
             # Bloqueio cadastral ou de IP: abre o circuito imediatamente
-            self.circuit_breaker.state = CircuitState.OPEN
             raise AuthenticationBlockedException(
                 f"Acesso bloqueado ({response.status_code}) para {self.name}."
             )
         elif response.status_code >= 500:
-            self.circuit_breaker.record_failure()
-        else:
-            self.circuit_breaker.record_success()
+            response.raise_for_status()
