@@ -2,6 +2,7 @@
 Aderente estritamente ao DDL de market.cotacao_diaria e canonical.price_observation."""
 
 import asyncio
+import re
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -34,6 +35,20 @@ class DWWriter:
         if self._pool:
             await self._pool.close()
             self._pool = None
+
+    async def write_instrument_identifiers(self, quotes: list[dict[str, Any]]) -> None:
+        """Completa ISINs ausentes com identificadores oficiais da B3."""
+        values = list({
+            (q["ticker"], q["codigo_isin"])
+            for q in quotes if q.get("ticker") and re.fullmatch(r"[A-Z]{2}[A-Z0-9]{9}[0-9]", q.get("codigo_isin", ""))
+        })
+        if not values:
+            return
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            await conn.executemany(
+                "UPDATE core.ativo SET isin = $2 WHERE ticker = $1 AND isin IS NULL", values,
+            )
 
     async def get_ticker_id_map(self) -> dict[str, int]:
         """Carrega e armazena em cache o mapa ticker -> id_ativo de core.ativo."""

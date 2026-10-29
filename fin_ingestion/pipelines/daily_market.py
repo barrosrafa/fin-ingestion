@@ -29,6 +29,7 @@ class DailyMarketPipeline:
         """Consulta o universo ativo cadastrado no banco, com ordenação por liquidez e paginação."""
         try:
             traded_tickers = await self.b3.get_recent_traded_tickers()
+            await self.dw_writer.write_instrument_identifiers(self.b3.recent_daily_quotes)
             pool = await self.dw_writer.get_pool()
             async with pool.acquire() as conn:
                 if limit is None or limit <= 0:

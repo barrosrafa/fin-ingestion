@@ -137,3 +137,20 @@ async def test_official_fii_reports_choose_latest_version():
     assert result[0]['versao'] == 2
     assert result[0]['nome_fundo'] == 'latest'
     assert result[0]['patrimonio_liquido'] == 12345.67
+
+
+@pytest.mark.asyncio
+async def test_official_isin_backfill_preserves_existing_identifiers():
+    from unittest.mock import MagicMock
+
+    from fin_ingestion.dw.dw_writer import DWWriter
+    writer = DWWriter()
+    conn = AsyncMock()
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock()
+    writer.get_pool = AsyncMock(return_value=pool)
+    await writer.write_instrument_identifiers([{'ticker':'HGLG11','codigo_isin':'BRHGLGCTF004'}])
+    query, values = conn.executemany.call_args.args
+    assert 'isin IS NULL' in query
+    assert values == [('HGLG11','BRHGLGCTF004')]

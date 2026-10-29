@@ -125,13 +125,29 @@ uv run ruff format .
 
 ## 🤖 Automação em Nuvem Gratuita (GitHub Actions)
 
-As rotinas de ingestão incremental operam de forma 100% autônoma via workflow agendado em [`.github/workflows/scheduled-ingestion.yml`](.github/workflows/scheduled-ingestion.yml):
+As rotinas de ingestão incremental são disparadas pelo workflow agendado em [`.github/workflows/scheduled-ingestion.yml`](.github/workflows/scheduled-ingestion.yml):
 
 ### ⏰ Cronogramas Programados
-- **Pregão B3 (Seg-Sex, 11:00 às 17:00 a cada 2h)**: Ingestão de cotações e novos tickers.
-- **Fechamento Diário (Seg-Sex, 18:30 BRT)**: Consolidação de fechamento, proventos e indicadores.
-- **Fim de Semana (Domingo, 20:00 BRT)**: Enriquecimento cadastral e novos ativos (`enrich-metadata`).
-- **Disparo Manual**: Aba **Actions** -> **Scheduled Market Ingestion & Enrichment** -> **Run workflow**.
+
+Horários de Brasília (UTC−3), configurados em UTC no workflow:
+
+- **Seg–sex, 06:00** (`0 9 * * 1-5`): descoberta/cadastro de companhias da CVM.
+- **Seg–sex, 12:00** (`0 15 * * 1-5`): informes mensais oficiais de FIIs da CVM, última referência/versão por classe.
+- **Seg–sex, 18:00** (`0 21 * * 1-5`): mercado diário, indicadores e transformação/validação dbt.
+- **Domingo, 20:00** (`0 23 * * 0`): reconciliação da fila e enriquecimento dos ativos negociados.
+- **Disparo manual**: Actions → **CI, Quality Audit & Scheduled Maintenance** → **Run workflow**.
+
+O GitHub Actions pode atrasar o início das rotinas. O cron expressa o horário solicitado; não oferece garantia de início pontual. Não há agendamento intraday neste workflow.
+
+### Fontes e critérios de sucesso
+
+As rotinas programadas usam fontes oficiais B3/CVM/BCB e o feed público histórico de cotações. Coletores secundários são opcionais (`include_secondary=True` na API Python dos pipelines). Falhas de acesso não geram valores de exemplo automaticamente.
+
+O universo diário é a interseção do cadastro com o último arquivo spot publicado pela B3. Quando o feed de cotações não cobre um instrumento, utiliza-se a cotação oficial do último arquivo disponível, com a data de referência informada no resultado. Arquivos brutos não são excluídos; registros sem campos obrigatórios ficam visíveis em `public_staging.stg_rejected_records` e não entram nos marts correspondentes.
+
+`backfill_stage1` seleciona até 150 componentes atuais do IBOV/IFIX cadastrados, ordenados por liquidez. O histórico é o máximo disponível no feed, **não uma garantia de 30 anos completos nem comprovação da data de IPO**. Na validação de 29/10/2026, a primeira cotação disponível era de 03/01/2000. Cobertura anterior exige integração histórica adicional, inclusive tratamento de códigos antigos e eventos corporativos.
+
+`dbt-run` instala dependências, transforma e executa os testes de dados. Erros do dbt, backfill incompleto, fechamento sem cotações ou falhas de enriquecimento retornam código de saída diferente de zero. Os fatos de cotações e proventos são conferidos contra as tabelas canônicas. Os resultados e logs do dbt ficam nos artefatos do Actions.
 
 ### 🔑 GitHub Secrets Necessários
 No repositório GitHub (`Settings` -> `Secrets and variables` -> `Actions`), cadastre:
