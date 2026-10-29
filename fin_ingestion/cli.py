@@ -512,6 +512,61 @@ def export_snapshots(
 
 
 @app.command()
+def backfill_history(
+    stage: Annotated[int, typer.Option("--stage", "-s", help="Etapa de carga: 1 (Validação rápida ~150 ativos) ou 2 (Universo completo)")] = 1,
+    tickers: Annotated[str | None, typer.Option("--tickers", "-t", help="Lista de tickers separados por vírgula (opcional)")] = None,
+    concurrency: Annotated[int, typer.Option("--concurrency", "-c", help="Concorrência simultânea")] = 8,
+) -> None:
+    """Executa o backfill histórico de 30 anos (desde o IPO) de cotações, proventos e splits."""
+    console.print(f"\n[bold cyan]▶️ Iniciando Backfill Histórico de 30 Anos — Etapa {stage}...[/bold cyan]\n")
+    from fin_ingestion.pipelines.historical_backfill import HistoricalBackfillPipeline
+
+    ticker_list = [t.strip().upper() for t in tickers.split(",")] if tickers else None
+    pipeline = HistoricalBackfillPipeline(concurrency=concurrency)
+
+    async def _run():
+        try:
+            return await pipeline.run(stage=stage, tickers=ticker_list)
+        finally:
+            await pipeline.close()
+
+    result = asyncio.run(_run())
+
+    table = Table(title=f"Resultado do Backfill Histórico (Etapa {stage})")
+    table.add_column("Métrica", style="bold")
+    table.add_column("Valor", justify="right", style="green")
+
+    table.add_row("Total de Ativos Avaliados", str(result["total_assets"]))
+    table.add_row("Ativos Processados com Sucesso", str(result["successful_count"]))
+    table.add_row("Ativos sem Dados / Falhas", str(result["failed_count"]))
+    table.add_row("Total de Cotações Inseridas", f"{result['total_candles']:,}")
+    table.add_row("Total de Proventos Inseridos", f"{result['total_dividends']:,}")
+    table.add_row("Total de Splits Inseridos", f"{result['total_splits']:,}")
+    console.print(table)
+
+    if result["details"]:
+        d_table = Table(title="Amostra de Ativos Enriquecidos com Data de IPO")
+        d_table.add_column("Ticker", style="bold")
+        d_table.add_column("Data IPO / 1º Pregão", justify="center", style="cyan")
+        d_table.add_column("Cotações", justify="right")
+        d_table.add_column("Proventos", justify="right")
+        d_table.add_column("Splits", justify="right")
+
+        for d in result["details"][:10]:
+            d_table.add_row(
+                d["ticker"],
+                str(d["ipo_date"] or "-"),
+                f"{d['candles_count']:,}",
+                str(d["divs_count"]),
+                str(d["splits_count"]),
+            )
+        console.print(d_table)
+
+    if result["failed_tickers"]:
+        console.print(f"[bold yellow]Ativos sem dados de mercado históricos:[/bold yellow] {', '.join(result['failed_tickers'][:15])}")
+
+
+@app.command()
 def version() -> None:
     """Exibe a versão do pacote."""
     console.print("[bold cyan]fin-ingestion v0.1.0[/bold cyan]")
