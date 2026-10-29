@@ -73,6 +73,7 @@ jobs:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       DATABASE_URL_ASYNC: ${{ secrets.DATABASE_URL_ASYNC }}
       REDIS_URL: ${{ secrets.REDIS_URL }}
+      DISTRIBUTED_SOURCE_CONTROLS: "true"
       PYTHONUNBUFFERED: "1"
 
     steps:
@@ -90,6 +91,32 @@ jobs:
 
       - name: Install Dependencies
         run: uv sync --frozen || uv sync
+
+      - name: Verify Shared Redis Protection
+        run: |
+          uv run python - <<'PYREDIS'
+          import asyncio
+          import os
+          from uuid import uuid4
+          from redis.asyncio import Redis
+          from fin_ingestion.core.distributed_controls import DistributedSourceControls
+
+          async def verify():
+              if not os.environ.get("REDIS_URL", "").startswith("rediss://"):
+                  raise RuntimeError("Production ingestion requires a TLS Redis URL")
+              redis = Redis.from_url(os.environ["REDIS_URL"], socket_connect_timeout=5, socket_timeout=5)
+              controls = DistributedSourceControls(redis, "deploy-check:" + uuid4().hex, 2, 5)
+              try:
+                  await redis.ping()
+                  epoch = await controls.before_request()
+                  await controls.after_request(epoch, success=True)
+                  print("Shared Redis connectivity and atomic protection verified")
+              finally:
+                  await redis.delete(controls.bucket_key, controls.breaker_key)
+                  await redis.aclose()
+
+          asyncio.run(verify())
+          PYREDIS
 
       - name: Execute Schedule Action
         run: |
