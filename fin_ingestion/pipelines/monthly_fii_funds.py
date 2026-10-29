@@ -5,6 +5,7 @@ from typing import Any
 
 import structlog
 
+from fin_ingestion.collectors.official.cvm import CVMCollector
 from fin_ingestion.collectors.sites.brick360 import Brick360Collector
 from fin_ingestion.collectors.sites.clube_fii import ClubeFIICollector
 from fin_ingestion.collectors.sites.etfs_brasil import ETFsBrasilCollector
@@ -21,6 +22,7 @@ class MonthlyFIIFundsPipeline:
     """Executa a coleta mensal de vacância, carteiras CDA, rankings de FIIs e taxas de ETFs."""
 
     def __init__(self) -> None:
+        self.cvm = CVMCollector()
         self.clube_fii = ClubeFIICollector()
         self.funds_explorer = FundsExplorerCollector()
         self.fiis_com_br = FIISComBrCollector()
@@ -33,12 +35,19 @@ class MonthlyFIIFundsPipeline:
         fii_tickers: list[str] | None = None,
         etf_tickers: list[str] | None = None,
         tickers: list[str] | None = None,
+        include_secondary: bool = False,
     ) -> dict[str, Any]:
         fiis = fii_tickers or tickers or ["HGLG11", "KNIP11", "XPML11"]
         etfs = etf_tickers or ["BOVA11", "IVVB11", "SMAL11"]
 
         logger.info("Iniciando pipeline mensal de FIIs, Fundos e ETFs", fiis=fiis, etfs=etfs)
         results: dict[str, CollectorResult] = {}
+        try:
+            results["cvm_informe_mensal"] = await self.cvm.run(endpoint="fii_informe_mensal")
+        finally:
+            await self.cvm.close()
+        if not include_secondary:
+            return summarize_results("monthly_fii_funds", results)
 
         # Tarefas assíncronas em lote
         tasks = []

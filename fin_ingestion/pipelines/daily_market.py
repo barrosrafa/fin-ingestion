@@ -68,6 +68,7 @@ class DailyMarketPipeline:
         limit: int | None = None,
         offset: int = 0,
         concurrency: int = 10,
+        include_secondary: bool = False,
     ) -> dict[str, Any]:
         target_tickers = tickers or await self.get_active_universe(limit=limit, offset=offset)
         if not target_tickers:
@@ -90,8 +91,8 @@ class DailyMarketPipeline:
             async with collector_slots:
                 return await collector.run(**kwargs)
 
-        status_tasks = [collect_one(self.status_invest, ticker=t, category="acao") for t in target_tickers]
-        advfn_tasks = [collect_one(self.advfn, ticker=t, section="tecnica") for t in target_tickers]
+        status_tasks = [collect_one(self.status_invest, ticker=t, category="acao") for t in target_tickers] if include_secondary else []
+        advfn_tasks = [collect_one(self.advfn, ticker=t, section="tecnica") for t in target_tickers] if include_secondary else []
 
         status_results = await asyncio.gather(*status_tasks, return_exceptions=True)
         advfn_results = await asyncio.gather(*advfn_tasks, return_exceptions=True)

@@ -66,4 +66,12 @@ models:
       - name: custo_total_ter
         description: "TER total indisponível na fonte; não equivale à taxa de administração."
 
-  # Sources are declared above; registry records come from the canonical core schema.
+
+
+  - name: stg_cvm_fii_mensal
+    description: "Informes mensais oficiais da CVM, última versão por fundo/classe."
+    columns:
+      - name: cnpj_fundo
+        tests: [not_null]
+      - name: data_referencia
+        tests: [not_null]

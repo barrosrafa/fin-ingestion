@@ -24,14 +24,19 @@ class QuarterlyFinancialsPipeline:
         self.fundamentei = FundamenteiCollector()
         self.fundamentus = FundamentusCollector()
 
-    async def run(self, tickers: list[str] | None = None) -> dict[str, Any]:
+    async def run(self, tickers: list[str] | None = None, include_secondary: bool = False) -> dict[str, Any]:
         target_tickers = tickers or ["PETR4", "VALE3", "WEGE3"]
         logger.info("Iniciando pipeline trimestral de demonstrativos", tickers=target_tickers)
 
         results: dict[str, CollectorResult] = {}
 
         # 1. Cadastro CVM
-        results["cvm_cad"] = await self.cvm.run(endpoint="cad_cia_aberta")
+        try:
+            results["cvm_cad"] = await self.cvm.run(endpoint="cad_cia_aberta")
+        finally:
+            await self.cvm.close()
+        if not include_secondary:
+            return summarize_results("quarterly_financials", results)
 
         # 2. Investidor10, Fundamentei e Fundamentus em paralelo
         inv_tasks = [self.investidor10.run(ticker=t, endpoint="indicadores") for t in target_tickers]

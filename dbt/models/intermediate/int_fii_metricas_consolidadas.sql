@@ -1,7 +1,11 @@
 -- int_fii_metricas_consolidadas.sql
 -- Harmoniza métricas imobiliárias, vacâncias e pontuações do Clube FII e Brick360
 
-with clube as (
+with cvm as (
+    select * from {{ ref('stg_cvm_fii_mensal') }} where ticker is not null
+),
+
+clube as (
     select
         ticker,
         cnpj_fundo,
@@ -31,11 +35,11 @@ brick as (
 )
 
 select
-    coalesce(c.ticker, b.ticker) as ticker,
-    c.cnpj_fundo,
-    c.razao_social,
+    coalesce(v.ticker, c.ticker, b.ticker) as ticker,
+    coalesce(v.cnpj_fundo, c.cnpj_fundo) as cnpj_fundo,
+    coalesce(v.razao_social, c.razao_social) as razao_social,
     c.gestora,
-    c.patrimonio_liquido,
+    coalesce(v.patrimonio_liquido, c.patrimonio_liquido) as patrimonio_liquido,
     c.vacancia_fisica_pct,
     c.vacancia_financeira_pct,
     c.total_imoveis,
@@ -51,3 +55,5 @@ select
     b.contratos_atipicos_pct
 from clube c
 full outer join brick b on b.ticker = c.ticker
+
+full outer join cvm v on v.ticker = coalesce(c.ticker, b.ticker)

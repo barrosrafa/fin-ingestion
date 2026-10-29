@@ -18,11 +18,11 @@ def test_dbt_failure_is_not_success():
 @pytest.mark.asyncio
 async def test_monthly_accepts_cli_tickers():
     pipeline = MonthlyFIIFundsPipeline()
-    collectors = [pipeline.clube_fii, pipeline.funds_explorer, pipeline.fiis_com_br, pipeline.brick360, pipeline.mais_retorno, pipeline.etfs_brasil]
+    collectors = [pipeline.cvm, pipeline.clube_fii, pipeline.funds_explorer, pipeline.fiis_com_br, pipeline.brick360, pipeline.mais_retorno, pipeline.etfs_brasil]
     for collector in collectors:
         collector.run = AsyncMock(return_value=CollectorResult(source='test',success=True,records_count=1))
         collector.close = AsyncMock()
-    result = await pipeline.run(tickers=['HGLG11'])
+    result = await pipeline.run(tickers=['HGLG11'], include_secondary=True)
     assert result['total_records'] > 0
     pipeline.clube_fii.run.assert_awaited_once_with(ticker='HGLG11')
 
@@ -105,3 +105,35 @@ async def test_active_daily_universe_requires_official_trading_list():
     p.dw_writer.get_pool = AsyncMock(return_value=pool)
     assert await p.get_active_universe() == ['PETR4']
     assert ['PETR4'] in conn.fetch.call_args.args
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('module,classname',[('advfn','ADVFNCollector'),('brick360','Brick360Collector'),('clube_fii','ClubeFIICollector'),('funds_explorer','FundsExplorerCollector'),('fiis_com_br','FIISComBrCollector'),('mais_retorno','MaisRetornoCollector'),('investidor10','Investidor10Collector'),('fundamentei','FundamenteiCollector')])
+async def test_secondary_sources_never_invent_data(module,classname):
+    import importlib
+    c = getattr(importlib.import_module('fin_ingestion.collectors.sites.'+module),classname)()
+    c.http_client.get = AsyncMock(side_effect=RuntimeError('offline'))
+    c.http_client.post = AsyncMock(side_effect=RuntimeError('offline'))
+    with pytest.raises(RuntimeError):
+        await c.extract(ticker='PETR4')
+
+
+@pytest.mark.asyncio
+async def test_official_fii_reports_choose_latest_version():
+    import io
+    import zipfile
+
+    import httpx
+
+    from fin_ingestion.collectors.official.cvm import CVMCollector
+    c = CVMCollector()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as archive:
+        archive.writestr('inf_mensal_fii_geral_2026.csv', 'CNPJ_Fundo_Classe;Data_Referencia;Versao;Nome_Fundo_Classe\n01;2026-08-01;9;old\n01;2026-09-01;1;first\n01;2026-09-01;2;latest\n')
+        archive.writestr('inf_mensal_fii_complemento_2026.csv', 'CNPJ_Fundo_Classe;Data_Referencia;Versao;Patrimonio_Liquido\n01;2026-09-01;2;12345.67\n')
+    c.http_client.get = AsyncMock(return_value=httpx.Response(200, content=buffer.getvalue(), request=httpx.Request('GET','https://example.test')))
+    result = c.parse(await c.extract(endpoint='fii_informe_mensal', year=2026))
+    assert len(result) == 1
+    assert result[0]['versao'] == 2
+    assert result[0]['nome_fundo'] == 'latest'
+    assert result[0]['patrimonio_liquido'] == 12345.67
