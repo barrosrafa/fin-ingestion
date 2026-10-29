@@ -2,11 +2,13 @@
 -- Harmoniza métricas imobiliárias, vacâncias e pontuações do Clube FII e Brick360
 
 with cvm as (
-    select * from {{ ref('stg_cvm_fii_mensal') }} where ticker is not null
+    select distinct on (ticker) *
+    from {{ ref('stg_cvm_fii_mensal') }} where ticker is not null
+    order by ticker, data_referencia desc, versao desc, cnpj_fundo
 ),
 
 clube as (
-    select
+    select distinct on (ticker)
         ticker,
         cnpj_fundo,
         razao_social,
@@ -16,10 +18,11 @@ clube as (
         vacancia_financeira_pct,
         total_imoveis
     from {{ ref('stg_clube_fii_imoveis') }}
+    order by ticker, captured_at desc
 ),
 
 brick as (
-    select
+    select distinct on (ticker)
         ticker,
         score_global,
         score_imobiliario,
@@ -32,10 +35,12 @@ brick as (
         concentracao_top5_pct,
         contratos_atipicos_pct
     from {{ ref('stg_brick360_scores') }}
+    order by ticker, captured_at desc
 )
 
 select
     coalesce(v.ticker, c.ticker, b.ticker) as ticker,
+    v.data_referencia,
     coalesce(v.cnpj_fundo, c.cnpj_fundo) as cnpj_fundo,
     coalesce(v.razao_social, c.razao_social) as razao_social,
     c.gestora,

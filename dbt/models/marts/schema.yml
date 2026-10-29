@@ -49,3 +49,9 @@ models:
       - name: ticker
         tests:
           - not_null
+
+  - name: fct_fii_snapshot_mensal
+    description: "Última referência disponível por ticker, sem multiplicar classes/versões."
+    columns:
+      - name: ticker
+        tests: [not_null, unique]

@@ -3,6 +3,7 @@
 
 select
     ticker,
+    data_referencia,
     cnpj_fundo,
     razao_social,
     gestora,
