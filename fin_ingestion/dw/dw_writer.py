@@ -1,6 +1,7 @@
 """Escritor de dados de alta performance para o Data Warehouse (PostgreSQL 18 / TimescaleDB).
 Aderente estritamente ao DDL de market.cotacao_diaria e canonical.price_observation."""
 
+import asyncio
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -19,16 +20,20 @@ class DWWriter:
     def __init__(self, db_url: str | None = None) -> None:
         self.db_url = db_url or settings.database_url_async.replace("postgresql+asyncpg://", "postgresql://")
         self._pool: asyncpg.Pool | None = None
+        self._pool_lock = asyncio.Lock()
         self._ticker_map: dict[str, int] = {}
 
     async def get_pool(self) -> asyncpg.Pool:
         if self._pool is None:
-            self._pool = await asyncpg.create_pool(dsn=self.db_url, min_size=1, max_size=5)
+            async with self._pool_lock:
+                if self._pool is None:
+                    self._pool = await asyncpg.create_pool(dsn=self.db_url, min_size=1, max_size=5)
         return self._pool
 
     async def close(self) -> None:
         if self._pool:
             await self._pool.close()
+            self._pool = None
 
     async def get_ticker_id_map(self) -> dict[str, int]:
         """Carrega e armazena em cache o mapa ticker -> id_ativo de core.ativo."""

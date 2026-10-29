@@ -28,6 +28,7 @@ class DailyMarketPipeline:
     async def get_active_universe(self, limit: int | None = None, offset: int = 0) -> list[str]:
         """Consulta o universo ativo cadastrado no banco, com ordenação por liquidez e paginação."""
         try:
+            traded_tickers = await self.b3.get_recent_traded_tickers()
             pool = await self.dw_writer.get_pool()
             async with pool.acquire() as conn:
                 if limit is None or limit <= 0:
@@ -36,8 +37,10 @@ class DailyMarketPipeline:
                         SELECT ticker FROM core.ativo
                         WHERE ticker IS NOT NULL
                           AND tipo_ativo IN ('ACAO', 'FII', 'ETF', 'BDR')
+                          AND ticker = ANY($1::text[])
                         ORDER BY volume_medio DESC NULLS LAST, ticker ASC;
-                        """
+                        """,
+                        traded_tickers,
                     )
                 else:
                     rows = await conn.fetch(
@@ -45,9 +48,11 @@ class DailyMarketPipeline:
                         SELECT ticker FROM core.ativo
                         WHERE ticker IS NOT NULL
                           AND tipo_ativo IN ('ACAO', 'FII', 'ETF', 'BDR')
+                          AND ticker = ANY($1::text[])
                         ORDER BY volume_medio DESC NULLS LAST, ticker ASC
-                        LIMIT $1 OFFSET $2;
+                        LIMIT $2 OFFSET $3;
                         """,
+                        traded_tickers,
                         limit,
                         offset,
                     )
@@ -79,8 +84,14 @@ class DailyMarketPipeline:
         results["b3_ibov"] = await self.b3.run(endpoint="index_portfolio", index="IBOV")
 
         # 3. Status Invest & ADVFN para os tickers alvo
-        status_tasks = [self.status_invest.run(ticker=t, category="acao") for t in target_tickers]
-        advfn_tasks = [self.advfn.run(ticker=t, section="tecnica") for t in target_tickers]
+        collector_slots = asyncio.Semaphore(concurrency)
+
+        async def collect_one(collector, **kwargs):
+            async with collector_slots:
+                return await collector.run(**kwargs)
+
+        status_tasks = [collect_one(self.status_invest, ticker=t, category="acao") for t in target_tickers]
+        advfn_tasks = [collect_one(self.advfn, ticker=t, section="tecnica") for t in target_tickers]
 
         status_results = await asyncio.gather(*status_tasks, return_exceptions=True)
         advfn_results = await asyncio.gather(*advfn_tasks, return_exceptions=True)
@@ -165,6 +176,17 @@ class DailyMarketPipeline:
             finally:
                 await history.close()
 
+        b3_fallback_date = None
+        if fallback_failed:
+            if not self.b3.recent_daily_quotes:
+                await self.b3.get_recent_traded_tickers()
+            official = [q for q in self.b3.recent_daily_quotes if q["ticker"] in fallback_failed]
+            if official:
+                written_quotes += await self.dw_writer.write_daily_quotes(official)
+                recovered = {q["ticker"] for q in official}
+                fallback_failed = [t for t in fallback_failed if t not in recovered]
+                b3_fallback_date = max(q["data_pregao"] for q in official)
+
         # Fechamento de clientes
         await self.b3.close()
         await self.bcb.close()
@@ -175,11 +197,12 @@ class DailyMarketPipeline:
         if not written_quotes:
             raise RuntimeError("Fechamento diário sem cotações persistidas")
         total_records = sum(r.records_count for r in results.values()) + written_quotes
-        logger.info("Pipeline diário finalizado com sucesso", total_records=total_records, quotes_written=written_quotes)
+        logger.info("Pipeline diário finalizado", total_records=total_records, quotes_written=written_quotes)
 
         return {
             "pipeline": "daily_market",
             "failed_tickers": fallback_failed,
+            "b3_fallback_date": b3_fallback_date,
             "failed_sources": {name: r.errors for name, r in results.items() if not r.success},
             "status": "PARTIAL" if fallback_failed else "SUCCEEDED",
             "total_records": total_records,

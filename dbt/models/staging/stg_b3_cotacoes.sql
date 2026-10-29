@@ -20,6 +20,7 @@ with source as (
         trim(codigo_isin)::text as codigo_isin,
         captured_at
     from {{ source('raw', 'b3_cothist') }}
+    where nullif(trim(ticker), '') is not null and data_pregao is not null and preco_fechamento is not null
 )
 
 select * from source

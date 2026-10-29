@@ -109,6 +109,8 @@ def collect(
     res = asyncio.run(orchestrator.execute_pipeline(pipeline, tickers=ticker_list))
 
     console.print(f"[bold cyan]Concluído:[/bold cyan] {res}")
+    if res.get("failed_tickers"):
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -275,6 +277,7 @@ def dbt_run(
     try:
         subprocess.run(["dbt", "deps", "--project-dir", settings.dbt_project_dir, "--profiles-dir", settings.dbt_profiles_dir], env=env, check=True)
         subprocess.run(cmd, env=env, check=True)
+        subprocess.run(["dbt", "test", "--project-dir", settings.dbt_project_dir, "--profiles-dir", settings.dbt_profiles_dir, "--target", settings.dbt_target], env=env, check=True)
     except FileNotFoundError:
         console.print("[bold red]dbt não encontrado no PATH.[/bold red]")
         raise typer.Exit(code=1)
@@ -330,6 +333,8 @@ def enrich_metadata(
 
     res = asyncio.run(_run())
     console.print(f"[bold green]Enriquecimento concluído:[/bold green] {res}")
+    if res.get("failed"):
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -579,12 +584,11 @@ def backfill_history(
             )
         console.print(d_table)
 
+    if result["failed_tickers"]:
+        console.print(f"[bold yellow]Ativos sem dados de mercado históricos:[/bold yellow] {', '.join(result['failed_tickers'])}")
     if not result["total_assets"] or result["failed_count"]:
         console.print("[bold red]Backfill incompleto: universo vazio ou ativos com falha.[/bold red]")
         raise typer.Exit(code=1)
-
-    if result["failed_tickers"]:
-        console.print(f"[bold yellow]Ativos sem dados de mercado históricos:[/bold yellow] {', '.join(result['failed_tickers'][:15])}")
 
 
 @app.command()

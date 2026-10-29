@@ -16,6 +16,7 @@ with source as (
         contratos_atipicos_pct::numeric(6,2) as contratos_atipicos_pct,
         captured_at
     from {{ source('raw', 'brick360_scores') }}
+    where nullif(trim(ticker), '') is not null and score_global is not null
 )
 
 select * from source

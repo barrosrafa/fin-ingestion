@@ -1,6 +1,7 @@
 """Mecanismo de persistência raw (Bronze Layer) no PostgreSQL/TimescaleDB.
 Totalmente aderente ao DDL canônico de raw.ingestion_batch e raw.payload."""
 
+import asyncio
 import hashlib
 import json
 import uuid
@@ -20,15 +21,19 @@ class RawSink:
     def __init__(self, db_url: str | None = None) -> None:
         self.db_url = db_url or settings.database_url_async.replace("postgresql+asyncpg://", "postgresql://")
         self._pool: asyncpg.Pool | None = None
+        self._pool_lock = asyncio.Lock()
 
     async def get_pool(self) -> asyncpg.Pool:
         if self._pool is None:
-            self._pool = await asyncpg.create_pool(dsn=self.db_url, min_size=1, max_size=5)
+            async with self._pool_lock:
+                if self._pool is None:
+                    self._pool = await asyncpg.create_pool(dsn=self.db_url, min_size=1, max_size=5)
         return self._pool
 
     async def close(self) -> None:
         if self._pool:
             await self._pool.close()
+            self._pool = None
 
     async def create_batch(
         self,

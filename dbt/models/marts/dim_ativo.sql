@@ -1,38 +1,14 @@
--- dim_ativo.sql
--- Dimensão de instrumentos negociáveis (Ações, FIIs, ETFs, BDRs)
-
-with tickers_b3 as (
-    select distinct
-        ticker,
-        nome_resumido,
-        especificacao,
-        codigo_isin
-    from {{ ref('stg_b3_cotacoes') }}
-),
-
-etfs as (
-    select distinct
-        ticker,
-        custo_total_ter,
-        indice_referencia
-    from {{ ref('stg_etfs_brasil_taxas') }}
-)
-
+-- O cadastro canônico também contém ativos carregados pelas fontes históricas.
 select
-    b.ticker,
-    b.nome_resumido,
-    b.especificacao,
-    b.codigo_isin,
-    case
-        when e.ticker is not null then 'ETF'
-        when b.ticker like '%11' and b.especificacao like '%FII%' then 'FII'
-        when b.ticker like '%34' or b.ticker like '%35' then 'BDR'
-        when b.ticker like '%3' then 'ON'
-        when b.ticker like '%4' then 'PN'
-        when b.ticker like '%11' then 'UNIT'
-        else 'OUTRO'
-    end as classe_ativo,
-    coalesce(e.custo_total_ter, 0) as custo_total_ter,
-    e.indice_referencia
-from tickers_b3 b
-left join etfs e on e.ticker = b.ticker
+    a.ticker, e.nome_empresarial as nome_resumido,
+    a.classe_acao::text as especificacao,
+    a.isin as codigo_isin,
+    a.tipo_ativo::text as classe_ativo,
+    etf.custo_total_ter, etf.indice_referencia
+from {{ source('core', 'ativo') }} a
+left join {{ source('core', 'emissor_companhia') }} e using (id_emissor)
+left join (
+    select distinct on (ticker) ticker, custo_total_ter, indice_referencia
+    from {{ ref('stg_etfs_brasil_taxas') }} order by ticker, captured_at desc
+) etf using (ticker)
+where a.ticker is not null

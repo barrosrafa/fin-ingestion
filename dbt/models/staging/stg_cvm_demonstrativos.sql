@@ -14,6 +14,7 @@ with source as (
         valor_conta::numeric(20,4) as valor_conta,
         (dados_brutos->>'ORDEM_EXERC')::text as ordem_exercicio -- ULTIMO, PENULTIMO
     from {{ source('raw', 'cvm_demonstrativos') }}
+    where nullif(trim(cnpj_cia), '') is not null and data_referencia is not null
 )
 
 select * from source

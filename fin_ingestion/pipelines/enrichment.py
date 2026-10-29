@@ -26,6 +26,7 @@ class AssetMetadataEnricher:
         self.pool = db_pool
         self.semaphore = asyncio.Semaphore(max_concurrency)
         self.brapi_token = brapi_token
+        self.official_metadata = {}
 
     async def fetch_ticker_metadata(
         self,
@@ -74,6 +75,9 @@ class AssetMetadataEnricher:
             except Exception as e:
                 logger.debug("Falha na consulta Yahoo", ticker=ticker, error=str(e))
 
+            official = self.official_metadata.get(ticker)
+            if official:
+                return {"ticker": ticker, "nome_empresarial": official["nome_resumido"], "cnpj": None}
             return None
 
     async def enrich_ticker(
@@ -141,14 +145,24 @@ class AssetMetadataEnricher:
 
     async def enrich_missing_assets(self, limit: int = 100) -> dict[str, int]:
         """Busca ativos em core.ativo que ainda não possuem id_emissor e enriquece em lote."""
+        from fin_ingestion.collectors.official.b3 import B3Collector
+        b3 = B3Collector()
+        try:
+            active_tickers = await b3.get_recent_traded_tickers()
+            self.official_metadata = {q["ticker"]: q for q in b3.recent_daily_quotes}
+        finally:
+            await b3.close()
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT ticker FROM core.ativo
                 WHERE id_emissor IS NULL
+                  AND tipo_ativo IN ('ACAO','FII','ETF','BDR')
+                  AND ticker = ANY($1::text[])
                 ORDER BY ticker
-                LIMIT $1;
+                LIMIT $2;
                 """,
+                active_tickers,
                 limit,
             )
 

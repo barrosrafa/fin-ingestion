@@ -14,6 +14,7 @@ with source as (
         lista_imoveis as lista_imoveis_json,
         captured_at
     from {{ source('raw', 'clube_fii_graphql') }}
+    where nullif(trim(ticker), '') is not null
 )
 
 select * from source

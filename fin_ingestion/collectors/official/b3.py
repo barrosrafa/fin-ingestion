@@ -1,9 +1,12 @@
 """Coletor oficial B3: Cotações Históricas (COTAHIST), Instrumentos e Índices."""
 
 import base64
+import io
 import json
-from datetime import datetime
+import zipfile
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fin_ingestion.core.base_collector import BaseCollector
 
@@ -13,6 +16,38 @@ class B3Collector(BaseCollector):
 
     def __init__(self) -> None:
         super().__init__(name="b3", base_url="https://sistemaswebb3-listados.b3.com.br")
+        self.recent_daily_quotes = []
+
+    async def get_recent_traded_tickers(self) -> list[str]:
+        """Universo spot negociado no último arquivo diário publicado pela B3."""
+        today = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+        for offset in range(1, 11):
+            day = today - timedelta(days=offset)
+            if day.weekday() >= 5:
+                continue
+            url = "https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_D" + day.strftime("%d%m%Y") + ".ZIP"
+            response = await self.http_client.get(url)
+            if response.status_code == 404:
+                continue
+            response.raise_for_status()
+            if not response.content.startswith(b"PK"):
+                continue
+            with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+                with archive.open(archive.namelist()[0]) as data:
+                    self.recent_daily_quotes = [
+                        self.parse_cothist_line(line.decode("latin1").rstrip("\r\n"))
+                        for line in data
+                        if line.startswith(b"01") and line[24:27] == b"010"
+                    ]
+                    for quote in self.recent_daily_quotes:
+                        factor = quote["fator_cotacao"]
+                        if factor != 1:
+                            for key in ("preco_abertura", "preco_maximo", "preco_minimo", "preco_medio", "preco_fechamento"):
+                                quote[key] /= factor
+                    tickers = {q["ticker"] for q in self.recent_daily_quotes}
+            if tickers:
+                return sorted(tickers)
+        raise RuntimeError("Nenhum arquivo COTAHIST diário disponível nos últimos dez dias")
 
     async def extract(self, **kwargs: Any) -> Any:
         endpoint = kwargs.get("endpoint", "index_portfolio")

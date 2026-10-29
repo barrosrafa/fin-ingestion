@@ -31,6 +31,7 @@ sources:
     schema: market
     tables:
       - name: cotacao_diaria
+      - name: provento
 
 models:
   - name: stg_b3_cotacoes
@@ -63,7 +64,6 @@ models:
         tests:
           - not_null
       - name: custo_total_ter
-        tests:
-          - not_null
+        description: "TER total indisponível na fonte; não equivale à taxa de administração."
 
   # Sources are declared above; registry records come from the canonical core schema.

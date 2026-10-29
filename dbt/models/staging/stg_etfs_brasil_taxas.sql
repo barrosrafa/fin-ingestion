@@ -6,7 +6,7 @@ with source as (
         trim(ticker)::text as ticker,
         taxa_administracao_pct::numeric(6,4) as taxa_administracao_primaria,
         null::numeric(6,4) as taxa_secundaria,
-        taxa_administracao_pct::numeric(6,4) as custo_total_ter,
+        null::numeric(6,4) as custo_total_ter,
         nav_patrimonial::numeric(14,4) as nav_patrimonial,
         spread_nav_pct::numeric(8,4) as spread_nav_pct,
         limite_aluguel_pct::numeric(8,4) as limite_aluguel_pct,
@@ -14,6 +14,7 @@ with source as (
         trim(indice_referencia)::text as indice_referencia,
         captured_at
     from {{ source('raw', 'etfs_brasil_taxas') }}
+    where nullif(trim(ticker), '') is not null
 )
 
 select * from source

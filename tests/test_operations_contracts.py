@@ -75,3 +75,33 @@ def test_dbt_installs_dependencies_before_running():
         assert CliRunner().invoke(app, ['dbt-run']).exit_code == 0
         assert run.call_args_list[0].args[0][1] == 'deps'
         assert run.call_args_list[1].args[0][1] == 'run'
+
+
+@pytest.mark.asyncio
+async def test_raw_sink_concurrent_initialization_creates_one_pool():
+    import asyncio
+
+    from fin_ingestion.core.raw_sink import RawSink
+    sink = RawSink(db_url='postgresql://unused')
+    pool = AsyncMock()
+    async def create_pool(**kwargs):
+        await asyncio.sleep(0)
+        return pool
+    with patch('fin_ingestion.core.raw_sink.asyncpg.create_pool', side_effect=create_pool) as create:
+        pools = await asyncio.gather(*(sink.get_pool() for _ in range(30)))
+    assert all(p is pool for p in pools)
+    assert create.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_active_daily_universe_requires_official_trading_list():
+    from fin_ingestion.pipelines.daily_market import DailyMarketPipeline
+    p = DailyMarketPipeline()
+    p.b3.get_recent_traded_tickers = AsyncMock(return_value=['PETR4'])
+    conn = AsyncMock()
+    conn.fetch.return_value = [{'ticker':'PETR4'}]
+    pool = AsyncMock()
+    pool.acquire = lambda: __import__('unittest.mock',fromlist=['MagicMock']).MagicMock(__aenter__=AsyncMock(return_value=conn),__aexit__=AsyncMock(return_value=None))
+    p.dw_writer.get_pool = AsyncMock(return_value=pool)
+    assert await p.get_active_universe() == ['PETR4']
+    assert ['PETR4'] in conn.fetch.call_args.args
