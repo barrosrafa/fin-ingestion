@@ -34,3 +34,10 @@ PostgreSQL 16.2 e Redis isolados. Após acrescentar cobertura para Retry-After e
 esgotamento de tentativas após crash, os nove testes do runtime passaram novamente.
 Os quatro testes do disparador Cloudflare também passaram; Ruff e sintaxe
 YAML/shell aprovados. A migration SQL passou no validador schema-only de fin-db.
+
+O canário EOD identificou 1.481 tickers oficiais para 30/10 e apenas 614 já
+cadastrados. O fechamento foi ampliado para preservar o universo inteiro na
+camada nominal antes da promoção ao caminho legado. Os 867 sem cadastro ficam
+enumerados no recibo; não recebem uma classe ou emissor inventado. O teste de
+integração reprocessa um ticker sem cadastro e comprova persistência nominal
+idempotente sem criar instrumento fictício em `core.ativo`.

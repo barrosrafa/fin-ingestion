@@ -68,6 +68,12 @@ pendente para retry ou FAILED visível. Cotações intraday vencidas ficam EXPIR
 não são substituídas por preço atual rotulado como histórico. O prazo é de frescor,
 não uma garantia de entrega pontual do GitHub.
 
+O fechamento preserva todos os tickers do arquivo oficial da sessão em
+`market.nominal_bar` e no modelo Gold correspondente. Somente instrumentos com
+cadastro confirmado são promovidos também ao caminho legado `market.cotacao_diaria`.
+O recibo registra cobertura nominal, cobertura de serving e tickers sem cadastro;
+esses preços não são descartados nem classificados como FII/ação por suposição.
+
 O workflow de manutenção conserva CI e ferramentas manuais, sem cron paralelo.
 As políticas legadas/`scheduled_*` não devem ser consumidas por outro scheduler
 contínuo enquanto o runtime for o dono desses datasets. O mutex Redis continua

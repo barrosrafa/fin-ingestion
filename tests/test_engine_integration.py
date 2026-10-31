@@ -271,3 +271,37 @@ async def test_real_queue_failure_respects_retry_after_and_releases_lease(isolat
             assert 299 <= row["delay"] <= 330
     finally:
         await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_official_session_keeps_uncatalogued_prices_and_replay_identity(isolated_database):
+    from unittest.mock import AsyncMock
+
+    from fin_ingestion.pipelines.market_gateway import MarketGateway
+
+    pool = await asyncpg.create_pool(isolated_database, min_size=1, max_size=3)
+    gateway = MarketGateway(pool)
+    day = date(2026, 10, 30)
+    rows = [{"ticker": ticker, "data_pregao": day.isoformat(), "fator_cotacao": 1,
+             "preco_abertura": 10, "preco_maximo": 12, "preco_minimo": 9,
+             "preco_fechamento": 11, "quantidade_titulos": 100,
+             "volume_financeiro": 1100, "numero_negocios": 5}
+            for ticker in ("PETR4", "A1AP34")]
+    gateway.b3.get_daily_quotes = AsyncMock(return_value=rows)
+    # The old serving schema is independently guarded by its writer tests. This
+    # test proves real nominal persistence even when no serving ID exists.
+    gateway.writer.write_daily_quotes = AsyncMock(return_value=1)
+    try:
+        for _ in range(2):
+            result = await gateway.official_session(day)
+            assert result["records_loaded"] == 2
+            assert result["serving_records_loaded"] == 1
+            assert result["universe"]["unresolved"] == ["A1AP34"]
+        async with pool.acquire() as conn:
+            assert await conn.fetchval("SELECT count(*) FROM market.nominal_bar") == 2
+            assert await conn.fetchval("SELECT count(*) FROM core.ativo") == 1
+        serving = gateway.writer.write_daily_quotes.call_args.args[0]
+        assert [r["ticker"] for r in serving] == ["PETR4"]
+    finally:
+        await gateway.close()
+        await pool.close()
