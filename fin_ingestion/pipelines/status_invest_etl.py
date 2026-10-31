@@ -219,8 +219,10 @@ class StatusInvestETL:
                     await conn.executemany(
                         """
                         INSERT INTO market.cotacao_intraday (
-                            id_ativo, timestamp, preco_atual, variacao, volume
-                        ) VALUES ($1, $2, $3, $4, $5);
+                            id_ativo, timestamp, preco_atual, variacao, volume, source_id, price_kind
+                        ) VALUES ($1, $2, $3, $4, $5, 'status_invest', 'intraday_snapshot')
+                        ON CONFLICT (id_ativo,timestamp,source_id,price_kind) WHERE source_id IS NOT NULL
+                        DO UPDATE SET preco_atual=EXCLUDED.preco_atual,variacao=EXCLUDED.variacao,volume=EXCLUDED.volume;
                         """,
                         cotacao_records,
                     )
@@ -393,8 +395,10 @@ class StatusInvestETL:
                     await conn.executemany(
                         """
                         INSERT INTO market.cotacao_intraday (
-                            id_ativo, timestamp, preco_atual, variacao, volume
-                        ) VALUES ($1, $2, $3, $4, $5);
+                            id_ativo, timestamp, preco_atual, variacao, volume, source_id, price_kind
+                        ) VALUES ($1, $2, $3, $4, $5, 'status_invest', 'intraday_snapshot')
+                        ON CONFLICT (id_ativo,timestamp,source_id,price_kind) WHERE source_id IS NOT NULL
+                        DO UPDATE SET preco_atual=EXCLUDED.preco_atual,variacao=EXCLUDED.variacao,volume=EXCLUDED.volume;
                         """,
                         cotacao_records,
                     )

@@ -1,0 +1,20 @@
+{
+  "mode": "read_only_preflight",
+  "migrations": [
+    {
+      "migration": "17_scheduled_engine_v4.5/01_expand_silver.sql",
+      "sha256": "77f17dbb759c71b867d7727cd12045564ed8f1e8e46830e2398b84b948cce679",
+      "state": "already_applied"
+    },
+    {
+      "migration": "17_scheduled_engine_v4.5/02_scheduler_policies.sql",
+      "sha256": "3baa741afeb0b925b6eafa047aa7bb17dfdabe121a5c19ff728c24af62123e73",
+      "state": "already_applied"
+    },
+    {
+      "migration": "17_scheduled_engine_v4.5/03_filtered_workers.sql",
+      "sha256": "0224f8ae2516146cad220381ae7054f829fc848379b138419f6a64eb961e7245",
+      "state": "already_applied"
+    }
+  ]
+}

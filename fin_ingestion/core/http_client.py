@@ -1,6 +1,9 @@
 """Cliente HTTP assíncrono resiliente com emulação de navegador e retries com backoff."""
 
+import math
 import random
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -8,6 +11,7 @@ import httpx
 from redis.asyncio import Redis
 from tenacity import (
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     wait_random_exponential,
@@ -48,6 +52,12 @@ DEFAULT_USER_AGENTS = [
 ]
 
 
+def _retryable_get_error(exc: BaseException) -> bool:
+    return isinstance(exc, (httpx.NetworkError, httpx.TimeoutException)) or (
+        isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600
+    )
+
+
 class ResilientHttpClient:
     """Cliente HTTP com suporte a pooling, retries, circuit breaker e headers de navegação real."""
 
@@ -71,6 +81,7 @@ class ResilientHttpClient:
         self._client: httpx.AsyncClient | None = None
         self._redis = None
         self.distributed = None
+        self.budget = None
         if settings.distributed_source_controls:
             self._redis = Redis.from_url(settings.redis_url, socket_connect_timeout=2, socket_timeout=2)
             # All collectors for one upstream host share protection across replicas.
@@ -122,7 +133,7 @@ class ResilientHttpClient:
             await self._redis.aclose()
 
     @retry(
-        retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
+        retry=retry_if_exception(_retryable_get_error),
         stop=stop_after_attempt(3),
         wait=wait_random_exponential(multiplier=1, max=10),
         reraise=True,
@@ -132,18 +143,21 @@ class ResilientHttpClient:
         endpoint: str,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        cost: float = 1.0,
     ) -> httpx.Response:
         epoch = None
         if self.distributed is not None:
-            epoch = await self.distributed.before_request()
+            epoch = await self.distributed.before_request(cost=cost)
         elif not self.circuit_breaker.can_execute():
             raise CircuitBreakerOpenException(
                 f"Circuito aberto para {self.name}. Tentativa cancelada."
             )
 
         if self.distributed is None:
-            await self.rate_limiter.acquire()
+            await self.rate_limiter.acquire(cost=cost)
         client = await self.get_client()
+        if self.budget is not None:
+            await self.budget.reserve(cost)
 
         try:
             response = await client.get(endpoint, params=params, headers=headers)
@@ -178,18 +192,21 @@ class ResilientHttpClient:
         data: Any = None,
         json: Any = None,
         headers: dict[str, str] | None = None,
+        cost: float = 1.0,
     ) -> httpx.Response:
         epoch = None
         if self.distributed is not None:
-            epoch = await self.distributed.before_request()
+            epoch = await self.distributed.before_request(cost=cost)
         elif not self.circuit_breaker.can_execute():
             raise CircuitBreakerOpenException(
                 f"Circuito aberto para {self.name}. Tentativa cancelada."
             )
 
         if self.distributed is None:
-            await self.rate_limiter.acquire()
+            await self.rate_limiter.acquire(cost=cost)
         client = await self.get_client()
+        if self.budget is not None:
+            await self.budget.reserve(cost)
 
         try:
             response = await client.post(endpoint, data=data, json=json, headers=headers)
@@ -216,7 +233,16 @@ class ResilientHttpClient:
         """Avalia códigos HTTP de erro e aciona circuit breaker / cooldown."""
         if response.status_code == 429:
             retry_after_hdr = response.headers.get("Retry-After")
-            wait_sec = int(retry_after_hdr) if retry_after_hdr and retry_after_hdr.isdigit() else 60
+            wait_sec = 60
+            if retry_after_hdr:
+                try:
+                    if retry_after_hdr.strip().isdigit():
+                        wait_sec = int(retry_after_hdr)
+                    else:
+                        retry_at = parsedate_to_datetime(retry_after_hdr)
+                        wait_sec = max(0, math.ceil((retry_at - datetime.now(timezone.utc)).total_seconds()))
+                except (ValueError, TypeError, OverflowError):
+                    pass
             raise RateLimitExceededException(
                 f"Rate limit (429) excedido para {self.name}. Retry-After: {wait_sec}s.",
                 retry_after=wait_sec,

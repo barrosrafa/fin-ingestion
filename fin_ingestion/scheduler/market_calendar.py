@@ -20,6 +20,8 @@ B3_HOLIDAYS = {
     date(2026, 11, 2),  # Finados
     date(2026, 11, 20), # Consciência Negra
     date(2026, 12, 25), # Natal
+    date(2026, 12, 24), # Calendário oficial B3 2026
+    date(2026, 12, 31),
 }
 
 
@@ -37,9 +39,14 @@ class MarketCalendar:
     def is_b3_market_open(dt: datetime | None = None) -> bool:
         """Verifica se o pregão da B3 está aberto no momento (10:00 às 17:55 BRT)."""
         now = dt or datetime.now(TZ_SP)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("Market session requires a timezone-aware datetime")
+        now = now.astimezone(TZ_SP)
         if not MarketCalendar.is_b3_trading_day(now.date()):
             return False
-        start_time = time(10, 0)
+        if now.year != 2026:
+            raise ValueError("Intraday requires a reviewed official calendar for this year")
+        start_time = time(13, 0) if now.date() == date(2026, 2, 18) else time(10, 0)
         end_time = time(17, 55)
         return start_time <= now.time() <= end_time
 

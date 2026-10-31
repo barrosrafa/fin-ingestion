@@ -1,0 +1,45 @@
+{
+  "target": "configured_database",
+  "server_version": "18.6 (4e5fd08)",
+  "scheduled_policies": [
+    {
+      "policy_id": "scheduled_debentures",
+      "is_active": false
+    },
+    {
+      "policy_id": "scheduled_focus",
+      "is_active": false
+    },
+    {
+      "policy_id": "scheduled_intraday",
+      "is_active": false
+    },
+    {
+      "policy_id": "scheduled_ptax",
+      "is_active": false
+    },
+    {
+      "policy_id": "scheduled_ptax_close",
+      "is_active": false
+    },
+    {
+      "policy_id": "scheduled_treasury",
+      "is_active": false
+    }
+  ],
+  "intraday_rows": 0,
+  "legacy_financial_columns": [
+    "statement_id",
+    "legal_entity_id",
+    "instrument_id",
+    "source_id",
+    "statement_type",
+    "period_start",
+    "period_end",
+    "filing_date",
+    "currency_code",
+    "consolidation",
+    "payload_id"
+  ],
+  "new_cvm_table_exists": "canonical.cvm_statement"
+}

@@ -17,7 +17,9 @@ class AsyncRateLimiter:
         self.last_update = time.monotonic()
         self._lock = asyncio.Lock()
 
-    async def acquire(self) -> None:
+    async def acquire(self, cost: float = 1.0) -> None:
+        if not math.isfinite(cost) or cost <= 0 or cost > self.capacity:
+            raise ValueError("Request cost must be positive and no greater than burst capacity")
         async with self._lock:
             while True:
                 now = time.monotonic()
@@ -27,10 +29,10 @@ class AsyncRateLimiter:
                 # Reabastece tokens proporcionalmente ao tempo decorrido
                 self.tokens = min(float(self.capacity), self.tokens + elapsed * self.rate)
 
-                if self.tokens >= 1.0:
-                    self.tokens -= 1.0
+                if self.tokens >= cost:
+                    self.tokens -= cost
                     return
 
                 # Calcula quanto tempo dormir até ter pelo menos 1 token
-                sleep_time = (1.0 - self.tokens) / self.rate
+                sleep_time = (cost - self.tokens) / self.rate
                 await asyncio.sleep(sleep_time)

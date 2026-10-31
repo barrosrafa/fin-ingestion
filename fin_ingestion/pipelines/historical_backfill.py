@@ -6,7 +6,7 @@ garantindo zero duplicação através de chaves primárias e constraints únicas
 """
 
 import asyncio
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -84,15 +84,15 @@ class HistoricalBackfillPipeline:
         candles = []
         prev_close: Decimal | None = None
 
-        for t, o, h, l, c, v in zip(timestamps, opens, highs, lows, closes, volumes):
-            if c is None or o is None or h is None or l is None or t is None:
+        for t, o, h, low, c, v in zip(timestamps, opens, highs, lows, closes, volumes):
+            if c is None or o is None or h is None or low is None or t is None:
                 continue
 
             dt = datetime.fromtimestamp(t, tz=timezone.utc).date()
             c_val = Decimal(str(round(c, 2)))
             o_val = Decimal(str(round(o, 2)))
             h_val = Decimal(str(round(h, 2)))
-            l_val = Decimal(str(round(l, 2)))
+            l_val = Decimal(str(round(low, 2)))
             v_val = Decimal(str(v or 0))
 
             var_pct: Decimal | None = None

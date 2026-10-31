@@ -50,7 +50,7 @@ async def test_task_dispatcher_dispatch_one_success():
     }
 
     dispatcher.queue.claim_task = AsyncMock(return_value=mock_task)
-    dispatcher.queue.complete_task = AsyncMock(return_value=True)
+    dispatcher.queue.finish_success = AsyncMock()
 
     with patch.object(dispatcher, "execute_task_payload", new_callable=AsyncMock) as mock_exec:
         mock_exec.return_value = {
@@ -68,10 +68,8 @@ async def test_task_dispatcher_dispatch_one_success():
         assert result["target"] == "PETR4"
 
         # Verifica chamada de finalização com lock token
-        dispatcher.queue.complete_task.assert_awaited_once_with(
-            task_id=fake_task_id,
-            lock_token=fake_token,
-        )
+        dispatcher.queue.finish_success.assert_awaited_once()
+        assert dispatcher.queue.finish_success.call_args.args[0]["lock_token"] == fake_token
 
 
 @pytest.mark.asyncio

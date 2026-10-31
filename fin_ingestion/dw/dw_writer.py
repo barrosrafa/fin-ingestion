@@ -11,6 +11,9 @@ import asyncpg
 import structlog
 
 from fin_ingestion.config import settings
+from fin_ingestion.quality.market_schema import validate_complete_candles
+from fin_ingestion.quality.temporal import timestamp_utc
+from fin_ingestion.quality.validator import DataQualityValidator
 
 logger = structlog.get_logger(__name__)
 
@@ -64,6 +67,23 @@ class DWWriter:
         if not quotes:
             return 0
 
+        # Fail the whole batch before opening a connection; Bronze remains replayable.
+        errors = []
+        for index, quote in enumerate(quotes):
+            valid, reason, _ = DataQualityValidator.validate_daily_candle(quote)
+            try:
+                day = quote.get("data_pregao")
+                day = date.fromisoformat(day) if isinstance(day, str) else day
+                if type(day) is not date:
+                    raise ValueError("data_pregao must be a date")
+            except (TypeError, ValueError) as exc:
+                valid, reason = False, str(exc)
+            if not valid:
+                errors.append(f"row {index}: {reason}")
+        if errors:
+            raise ValueError("Invalid daily quote batch: " + "; ".join(errors))
+        validate_complete_candles(quotes)
+
         ticker_map = await self.get_ticker_id_map()
 
         query = """
@@ -111,8 +131,8 @@ class DWWriter:
                 to_dec(q.get("preco_minimo")),
                 preco_fechamento,
                 to_dec(q.get("preco_medio")),
-                to_dec(q.get("volume_total") or q.get("volume_financeiro")),
-                q.get("quantidade_negocios") or 0,
+                to_dec(q.get("volume_total") if q.get("volume_total") is not None else q.get("volume_financeiro")),
+                q.get("quantidade_negocios", q.get("numero_negocios")),
                 to_dec(q.get("variacao_percentual")),
             ))
 
@@ -135,27 +155,29 @@ class DWWriter:
         source_name: str = "status_invest",
         variation: float | Decimal | None = None,
         volume: float | Decimal | None = None,
+        source_timezone: str | None = None,
     ) -> bool:
         """Grava observação pontual em market.cotacao_intraday sem criar OHLC artificial."""
+        ts = timestamp_utc(observed_at, source_timezone=source_timezone)
+        price_value = Decimal(str(price))
+        if not price_value.is_finite() or price_value <= 0:
+            raise ValueError("Observation price must be finite and positive")
+        for name, value in (("variation", variation), ("volume", volume)):
+            if value is not None:
+                number = Decimal(str(value))
+                if not number.is_finite() or (name == "volume" and number < 0):
+                    raise ValueError(f"Invalid observation {name}")
         ticker_map = await self.get_ticker_id_map()
         id_ativo = ticker_map.get(ticker)
         if not id_ativo:
             return False
 
-        from datetime import datetime, timezone
-        ts = observed_at
-        if isinstance(ts, str):
-            try:
-                ts = datetime.fromisoformat(ts)
-            except Exception:
-                ts = datetime.now(timezone.utc)
-        elif not isinstance(ts, datetime):
-            ts = datetime.now(timezone.utc)
-
         pool = await self.get_pool()
         query = """
-        INSERT INTO market.cotacao_intraday (id_ativo, timestamp, preco_atual, variacao, volume)
-        VALUES ($1, $2, $3, $4, $5);
+        INSERT INTO market.cotacao_intraday (id_ativo, timestamp, preco_atual, variacao, volume, source_id, price_kind)
+        VALUES ($1, $2, $3, $4, $5, $6, 'intraday_snapshot')
+        ON CONFLICT (id_ativo,timestamp,source_id,price_kind) WHERE source_id IS NOT NULL
+        DO UPDATE SET preco_atual=EXCLUDED.preco_atual, variacao=EXCLUDED.variacao, volume=EXCLUDED.volume;
         """
         async with pool.acquire() as conn:
             await conn.execute(
@@ -165,6 +187,7 @@ class DWWriter:
                 Decimal(str(price)),
                 Decimal(str(variation)) if variation is not None else None,
                 Decimal(str(volume)) if volume is not None else None,
+                source_name,
             )
         return True
 

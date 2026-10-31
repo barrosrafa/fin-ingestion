@@ -41,6 +41,8 @@ dbt/logs/
 data/raw/
 data/staging/
 data/downloads/
+data/bronze/
+data/homologation/
 
 # Local dbt installation identity
 dbt/.user.yml

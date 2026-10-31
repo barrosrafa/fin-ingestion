@@ -2,16 +2,16 @@ name: CI, Quality Audit & Scheduled Maintenance
 
 on:
   push:
-    branches: [main]
+    branches: [main, "codex/**"]
   pull_request:
-    branches: [main]
+    branches: [main, "codex/**"]
   schedule:
     # Seg-Sex CVM Descoberta de Demonstrativos ITR/DFP (06:00 BRT = 09:00 UTC)
     - cron: '0 9 * * 1-5'
     # Seg-Sex FIIs Informes & Eventos (12:00 BRT = 15:00 UTC)
     - cron: '0 15 * * 1-5'
-    # Seg-Sex Fechamento Diário de Mercado B3, Proventos e dbt (18:00 BRT = 21:00 UTC)
-    - cron: '0 21 * * 1-5'
+    # Seg-Sex Fechamento Diário de Mercado B3, Proventos e dbt (19:00 BRT = 22:00 UTC)
+    - cron: '0 22 * * 1-5'
     # Domingo à noite para reconciliação e enriquecimento cadastral (20:00 BRT = 23:00 UTC)
     - cron: '0 23 * * 0'
   workflow_dispatch:
@@ -43,12 +43,26 @@ jobs:
     name: Code Quality & Automated Unit Tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      redis:
+        image: redis:7.2-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      REDIS_URL: redis://127.0.0.1:6379/0
+      DATABASE_URL: postgresql://unused@127.0.0.1:1/unused
+      DATABASE_URL_ASYNC: postgresql://unused@127.0.0.1:1/unused
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install uv (Fast Python Package Manager)
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: "latest"
           enable-cache: true
@@ -57,10 +71,13 @@ jobs:
         run: uv python install 3.12
 
       - name: Install Dependencies
-        run: uv sync --frozen || uv sync
+        run: uv sync --python 3.12 --frozen
 
       - name: Run Test Suite
         run: uv run pytest tests/ -v
+
+      - name: Run Ruff
+        run: uv run ruff check .
 
   ops-execution:
     name: Execute Ingestion Maintenance
@@ -68,6 +85,9 @@ jobs:
     needs: [test]
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    concurrency:
+      group: fin-ingestion-operations
+      cancel-in-progress: false
 
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -78,10 +98,10 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: "latest"
           enable-cache: true
@@ -90,7 +110,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install Dependencies
-        run: uv sync --frozen || uv sync
+        run: uv sync --python 3.12 --frozen
 
       - name: Verify Shared Redis Protection
         run: |
@@ -119,17 +139,22 @@ jobs:
           PYREDIS
 
       - name: Execute Schedule Action
+        env:
+          ACTION: ${{ github.event.inputs.action }}
+          CRON_TRIGGER: ${{ github.event.schedule }}
+          INPUT_TICKERS: ${{ github.event.inputs.tickers }}
         run: |
-          ACTION="${{ github.event.inputs.action }}"
-          CRON_TRIGGER="${{ github.event.schedule }}"
+          set -euo pipefail
+          TICKERS_ARGS=()
+          if [ -n "$INPUT_TICKERS" ]; then
+            TICKERS_ARGS=(--tickers "$INPUT_TICKERS")
+          fi
           
           if [ -n "$ACTION" ]; then
             echo "Executando ação manual: $ACTION"
             case "$ACTION" in
               backfill_stage1)
-                TICKERS_ARG=""
-                [ -n "${{ github.event.inputs.tickers }}" ] && TICKERS_ARG="--tickers ${{ github.event.inputs.tickers }}"
-                uv run fin-ingestion backfill-history --stage 1 $TICKERS_ARG
+                uv run fin-ingestion backfill-history --stage 1 "${TICKERS_ARGS[@]}"
                 uv run fin-ingestion compute-analytics
                 uv run fin-ingestion dbt-run --models "staging intermediate marts"
                 ;;
@@ -139,9 +164,7 @@ jobs:
                 uv run fin-ingestion dbt-run --models "staging intermediate marts"
                 ;;
               daily_market)
-                TICKERS_ARG=""
-                [ -n "${{ github.event.inputs.tickers }}" ] && TICKERS_ARG="--tickers ${{ github.event.inputs.tickers }}"
-                uv run fin-ingestion collect --pipeline daily $TICKERS_ARG
+                uv run fin-ingestion collect --pipeline daily "${TICKERS_ARGS[@]}"
                 uv run fin-ingestion compute-analytics
                 uv run fin-ingestion dbt-run --models "staging intermediate marts"
                 ;;
@@ -170,8 +193,8 @@ jobs:
                 uv run fin-ingestion test-sources
                 ;;
             esac
-          elif [ "$CRON_TRIGGER" = "0 21 * * 1-5" ]; then
-            echo "Executando fechamento diário de mercado B3 às 18:00 BRT (21:00 UTC)"
+          elif [ "$CRON_TRIGGER" = "0 22 * * 1-5" ]; then
+            echo "Executando fechamento diário de mercado B3 às 19:00 BRT (22:00 UTC)"
             uv run fin-ingestion collect --pipeline daily
             uv run fin-ingestion compute-analytics
             uv run fin-ingestion dbt-run --models "staging intermediate marts"
@@ -189,7 +212,7 @@ jobs:
 
       - name: Upload dbt diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dbt-results-${{ github.run_id }}
           path: |

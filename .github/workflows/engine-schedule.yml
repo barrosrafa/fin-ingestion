@@ -1,0 +1,81 @@
+name: Scheduled engine production
+
+on:
+  schedule:
+    - cron: '0 12 * * 1-5'
+    - cron: '0 13-16 * * 1-5'
+    - cron: '30 16 * * 1-5'
+    - cron: '30 12 * * 1-5'
+    - cron: '0 21 * * 1-5'
+    - cron: '0 11 * * 6'
+    - cron: '*/15 13-20 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      profile:
+        type: choice
+        options: [morning, ptax, treasury, cvm, intraday]
+        default: morning
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fin-ingestion-operations
+  cancel-in-progress: false
+
+jobs:
+  execute:
+    if: vars.ENGINE_ENABLED == 'true' && vars.ENGINE_RELEASE_SHA != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_URL_ASYNC: ${{ secrets.DATABASE_URL_ASYNC }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      BRAPI_API_KEY: ${{ secrets.BRAPI_API_KEY }}
+      PROVIDER_MONTHLY_CREDITS: ${{ vars.PROVIDER_MONTHLY_CREDITS || '{"brapi":1000}' }}
+      INTRADAY_ENABLED: ${{ vars.ENGINE_INTRADAY_ENABLED || 'false' }}
+      INTRADAY_TICKERS: ${{ vars.ENGINE_INTRADAY_TICKERS || '["PETR4"]' }}
+      CVM_CNPJS: ${{ vars.ENGINE_CVM_CNPJS || '["33000167000101"]' }}
+      INGESTION_ENV: production
+      DISTRIBUTED_SOURCE_CONTROLS: 'true'
+      PYTHONUNBUFFERED: '1'
+      RAW_LANDING_BACKEND: local
+      RAW_LANDING_DIR: data/bronze
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ vars.ENGINE_RELEASE_SHA }}
+      - name: Pin runtime receipt to the deployed source
+        run: echo "ENGINE_EXECUTED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --python 3.12 --frozen --no-dev
+      - name: Execute the due source profile
+        env:
+          MANUAL_PROFILE: ${{ inputs.profile }}
+          CRON: ${{ github.event.schedule }}
+        run: |
+          PROFILE="$MANUAL_PROFILE"
+          if [ -z "$PROFILE" ]; then
+            case "$CRON" in
+              '0 12 * * 1-5') PROFILE=morning ;;
+              '0 13-16 * * 1-5'|'30 16 * * 1-5') PROFILE=ptax ;;
+              '30 12 * * 1-5'|'0 21 * * 1-5') PROFILE=treasury ;;
+              '0 11 * * 6') PROFILE=cvm ;;
+              '*/15 13-20 * * 1-5') PROFILE=intraday ;;
+              *) echo 'Unknown cron'; exit 1 ;;
+            esac
+          fi
+          uv run --frozen --no-dev python -m fin_ingestion.operations.production "$PROFILE"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engine-runtime-${{ github.run_id }}
+          path: |
+            data/deployment.json
+            data/bronze/
+          retention-days: 7
+          if-no-files-found: warn

@@ -1,9 +1,10 @@
 """CLI unificada para orquestração de ingestão, cálculos analíticos e dbt."""
 
 import asyncio
+import json
 import os
 import subprocess
-import urllib.parse
+from pathlib import Path
 from typing import Annotated
 
 import structlog
@@ -45,6 +46,38 @@ app = typer.Typer(
     help="Pipeline de Ingestão, Analytics e Transformação dbt para Mercados Financeiros.",
 )
 console = Console()
+
+
+@app.command()
+def raw_replay(
+    path: Annotated[Path, typer.Argument(help="Objeto Bronze local com nome SHA-256.bin")],
+    source: Annotated[str, typer.Option(help="Parser: bcb ou b3")],
+    output: Annotated[Path, typer.Option(help="Arquivo JSON de saída; deve ser novo")],
+    serie_id: Annotated[int | None, typer.Option(help="Código SGS para payload BCB sem envelope")] = None,
+) -> None:
+    """Valida hash e reprocessa um objeto Bronze offline, sem acessar banco ou APIs."""
+    from fin_ingestion.core.local_archive import LocalRawArchive
+
+    if source not in {"bcb", "b3"}:
+        raise typer.BadParameter("source deve ser bcb ou b3")
+    content = LocalRawArchive.read(path)
+    if source == "bcb":
+        payload = json.loads(content)
+        if isinstance(payload, list):
+            if serie_id is None or serie_id <= 0:
+                raise typer.BadParameter("Payload SGS nativo requer --serie-id positivo")
+            payload = {"serie_id": serie_id, "serie_name": next(
+                (name for name, code in BCBCollector.SERIES_MAP.items() if code == serie_id),
+                str(serie_id),
+            ), "data": payload}
+        records = BCBCollector().parse(payload)
+    else:
+        records = B3Collector().parse(content)
+    if not records:
+        raise typer.BadParameter("Objeto Bronze sem registros reconhecidos")
+    with output.open("x", encoding="utf-8") as stream:
+        json.dump(records, stream, ensure_ascii=False, default=str)
+    console.print(f"{len(records)} registros reprocessados em {output}")
 
 
 @app.command()
@@ -100,16 +133,29 @@ def test_sources() -> None:
 def collect(
     pipeline: Annotated[str, typer.Option("--pipeline", "-p", help="Nome do pipeline (daily, quarterly, monthly, all)")] = "daily",
     tickers: Annotated[str | None, typer.Option("--tickers", "-t", help="Lista de tickers separados por vírgula")] = None,
+    reference_date: Annotated[str | None, typer.Option(help="Data de referência YYYY-MM-DD")] = None,
+    start_date: Annotated[str | None, typer.Option(help="Início do histórico YYYY-MM-DD")] = None,
+    end_date: Annotated[str | None, typer.Option(help="Fim do histórico YYYY-MM-DD")] = None,
+    year: Annotated[int | None, typer.Option(help="Ano do arquivo CVM")] = None,
+    endpoint: Annotated[str | None, typer.Option(help="Endpoint permitido pelo conector")] = None,
+    cnpjs: Annotated[str | None, typer.Option(help="CNPJs numéricos separados por vírgula para CVM")] = None,
+    serie: Annotated[str | None, typer.Option(help="Nome da série SGS")] = None,
 ) -> None:
     """Dispara a execução de um pipeline de coleta de dados."""
     ticker_list = [t.strip().upper() for t in tickers.split(",")] if tickers else None
     orchestrator = PipelineOrchestrator()
 
     console.print(f"[bold green]▶️ Disparando pipeline '{pipeline}'...[/bold green]")
-    res = asyncio.run(orchestrator.execute_pipeline(pipeline, tickers=ticker_list))
+    options = {k: v for k, v in {"reference_date": reference_date, "start_date": start_date,
+               "end_date": end_date, "year": year, "endpoint": endpoint}.items() if v is not None}
+    if cnpjs:
+        options["cnpjs"]=[value.strip() for value in cnpjs.split(",")]
+    if serie:
+        options["serie"] = serie
+    res = asyncio.run(orchestrator.execute_pipeline(pipeline, tickers=ticker_list, **options))
 
     console.print(f"[bold cyan]Concluído:[/bold cyan] {res}")
-    if res.get("failed_tickers"):
+    if res.get("failed_tickers") or res.get("status") in {"PARTIAL", "FAILED"}:
         raise typer.Exit(code=1)
 
 
@@ -459,8 +505,8 @@ def dispatch_tasks(
 ) -> None:
     """Processa um lote de tarefas pendentes na fila PostgreSQL com SKIP LOCKED."""
     console.print(f"[bold green]▶️ Despachando tarefas da fila (limite: {max_tasks})...[/bold green]")
-    from fin_ingestion.dw.dw_writer import DWWriter
     from fin_ingestion.dispatcher.task_dispatcher import TaskDispatcher
+    from fin_ingestion.dw.dw_writer import DWWriter
 
     async def _run():
         dw = DWWriter()
@@ -484,6 +530,7 @@ def enqueue_task(
 ) -> None:
     """Enfileira uma tarefa na fila persistente PostgreSQL (ingestion.ingestion_task)."""
     import time
+
     from fin_ingestion.dw.dw_writer import DWWriter
     from fin_ingestion.queue.task_queue import PostgresTaskQueue
 

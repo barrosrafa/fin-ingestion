@@ -39,7 +39,7 @@ class CircuitBreaker:
                 self.last_state_change = now
                 return True
             return False
-        return True
+        return self.state == CircuitState.CLOSED
 
     def record_success(self) -> None:
         self.failure_count = 0
@@ -49,7 +49,7 @@ class CircuitBreaker:
 
     def record_failure(self) -> None:
         self.failure_count += 1
-        if self.failure_count >= self.failure_threshold:
+        if self.state == CircuitState.HALF_OPEN or self.failure_count >= self.failure_threshold:
             self.state = CircuitState.OPEN
             self.last_state_change = time.time()
 

@@ -6,6 +6,7 @@ auditoria em `ingestion.ingestion_run` e checkpoints em `ingestion.ingestion_che
 """
 
 import asyncio
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -14,14 +15,16 @@ import asyncpg
 import structlog
 
 from fin_ingestion.collectors.official.anbima import ANBIMACollector
-from fin_ingestion.collectors.official.bcb import BCBCollector
 from fin_ingestion.collectors.official.cvm import CVMCollector
 from fin_ingestion.collectors.sites.etfs_brasil import ETFsBrasilCollector
 from fin_ingestion.dw.dw_writer import DWWriter
 from fin_ingestion.pipelines.daily_market import DailyMarketPipeline
 from fin_ingestion.pipelines.enrichment import AssetMetadataEnricher
+from fin_ingestion.pipelines.market_gateway import MarketPipeline
 from fin_ingestion.pipelines.monthly_fii_funds import MonthlyFIIFundsPipeline
+from fin_ingestion.pipelines.provider_pipeline import ProviderPipeline
 from fin_ingestion.pipelines.quarterly_financials import QuarterlyFinancialsPipeline
+from fin_ingestion.pipelines.result import require_complete_result, summarize_results
 from fin_ingestion.queue.task_queue import PostgresTaskQueue
 
 logger = structlog.get_logger(__name__)
@@ -57,7 +60,13 @@ class TaskDispatcher:
         )
 
         # 1. Cotações e Mercado Diário/Intraday
-        if dataset in ("cotacao_diaria", "cotacao_intraday", "b3_daily_quotes"):
+        if dataset == "cotacao_intraday":
+            return await MarketPipeline(intraday=True, pool=self.pool).run(tickers=tickers)
+        if dataset in {"ptax", "focus", "tesouro", "anbima_feed", "cvm_dfp", "cvm_itr", "massive", "fmp", "twelve_data", "sgs", "b3_history"}:
+            return await ProviderPipeline(dataset, pool=self.pool).run(tickers=tickers, reference_date=task.get("reference_date"))
+        if dataset == "market_eod":
+            return await MarketPipeline(pool=self.pool).run(tickers=tickers, reference_date=task.get("reference_date"))
+        if dataset in ("cotacao_diaria", "b3_daily_quotes"):
             return await self.daily_pipeline.run(tickers=tickers)
 
         # 2. Demonstrações Financeiras e Balanços CVM (ITR/DFP)
@@ -70,21 +79,10 @@ class TaskDispatcher:
 
         # 4. Séries Macroeconômicas (BCB SGS / PTAX)
         elif dataset in ("serie_macro", "bcb_macro_series"):
-            bcb = BCBCollector()
-            try:
-                res_selic = await bcb.run(serie="selic_over", ultimos=10)
-                res_ipca = await bcb.run(serie="ipca", ultimos=5)
-                await bcb.close()
-                total_rec = (res_selic.records_count if res_selic else 0) + (res_ipca.records_count if res_ipca else 0)
-                return {
-                    "pipeline": "bcb_macro",
-                    "total_records": total_rec,
-                    "quotes_written": 0,
-                    "sources_executed": ["bcb_selic", "bcb_ipca"],
-                }
-            except Exception:
-                await bcb.close()
-                raise
+            from fin_ingestion.pipelines.oceans14_macro_market_pipeline import (
+                Oceans14MacroMarketPipeline,
+            )
+            return await Oceans14MacroMarketPipeline().run()
 
         # 5. Renda Fixa e Indicativos ANBIMA
         elif dataset in ("taxa_anbima", "anbima_indicativos"):
@@ -92,12 +90,7 @@ class TaskDispatcher:
             try:
                 res = await anbima.run()
                 await anbima.close()
-                return {
-                    "pipeline": "anbima_indicativos",
-                    "total_records": res.records_count if res else 0,
-                    "quotes_written": 0,
-                    "sources_executed": ["anbima"],
-                }
+                return summarize_results("anbima_indicativos", {"anbima": res})
             except Exception:
                 await anbima.close()
                 raise
@@ -108,12 +101,7 @@ class TaskDispatcher:
             try:
                 res = await etfs.run(ticker=target or "BOVA11")
                 await etfs.close()
-                return {
-                    "pipeline": "etfs_brasil",
-                    "total_records": res.records_count if res else 0,
-                    "quotes_written": 0,
-                    "sources_executed": ["etfs_brasil"],
-                }
+                return summarize_results("etfs_brasil", {"etfs_brasil": res})
             except Exception:
                 await etfs.close()
                 raise
@@ -124,12 +112,7 @@ class TaskDispatcher:
             try:
                 res = await cvm.run(dataset_type="informe_diario_fi")
                 await cvm.close()
-                return {
-                    "pipeline": "cvm_funds_daily",
-                    "total_records": res.records_count if res else 0,
-                    "quotes_written": 0,
-                    "sources_executed": ["cvm"],
-                }
+                return summarize_results("cvm_funds_daily", {"cvm": res})
             except Exception:
                 await cvm.close()
                 raise
@@ -146,8 +129,7 @@ class TaskDispatcher:
 
         # 9. Fallback genérico para pipeline diário de mercado
         else:
-            logger.info("Dataset não específico, delegando para daily_market", dataset=dataset)
-            return await self.daily_pipeline.run(tickers=tickers)
+            raise ValueError(f"Dataset sem rota de ingestão: {dataset}")
 
     async def dispatch_one(self, lease_duration_sec: int = 300) -> dict[str, Any] | None:
         """Reserva atomicamente e processa uma única tarefa da fila."""
@@ -164,49 +146,10 @@ class TaskDispatcher:
 
         try:
             result = await self.execute_task_payload(task)
+            require_complete_result(result)
             duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
 
-            # Grava histórico de execução (ingestion.ingestion_run)
-            async with self.pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO ingestion.ingestion_run (
-                        task_id, policy_id, worker_id, started_at, finished_at,
-                        status, records_extracted, records_loaded, duration_ms
-                    )
-                    VALUES ($1, $2, $3, $4, NOW(), 'SUCCEEDED', $5, $6, $7);
-                    """,
-                    task_id,
-                    policy_id,
-                    self.worker_id,
-                    start_time,
-                    result.get("total_records", 0),
-                    result.get("quotes_written", 0),
-                    duration_ms,
-                )
-
-                # Atualiza checkpoint de progresso
-                partition = target_entity or "ALL"
-                checkpoint_key = f"{dataset_name}:{partition}"
-                await conn.execute(
-                    """
-                    INSERT INTO ingestion.ingestion_checkpoint (
-                        checkpoint_key, dataset_name, source_name, partition_id,
-                        watermark_date, watermark_timestamp, last_confirmed_at
-                    )
-                    VALUES ($1, $2, 'fin-dispatcher', $3, CURRENT_DATE, NOW(), NOW())
-                    ON CONFLICT (checkpoint_key) DO UPDATE SET
-                        watermark_date = EXCLUDED.watermark_date,
-                        watermark_timestamp = EXCLUDED.watermark_timestamp,
-                        last_confirmed_at = EXCLUDED.last_confirmed_at;
-                    """,
-                    checkpoint_key,
-                    dataset_name,
-                    partition,
-                )
-
-            # Finaliza a tarefa com lease token
-            await self.queue.complete_task(task_id=task_id, lock_token=lock_token)
+            await self.queue.finish_success(task,result,start_time,duration_ms)
             logger.info("Tarefa de ingestão concluída com sucesso", task_id=str(task_id), duration_ms=duration_ms)
 
             return {
@@ -252,13 +195,16 @@ class TaskDispatcher:
                         task_id,
                         dataset_name,
                         target_entity,
-                        f'{{"error": "{str(e)[:200]}"}}',
+                        json.dumps({"error": str(e)[:200]}),
                     )
             except Exception as log_err:
                 logger.warning("Falha ao registrar auditoria de erro no banco", error=str(log_err))
 
             # Falha a tarefa para retentativa com backoff
-            await self.queue.fail_task(task_id=task_id, lock_token=lock_token, error_message=str(e))
+            retry_options = {}
+            if getattr(e, "retry_after", None) is not None:
+                retry_options["retry_delay_seconds"] = max(60, e.retry_after)
+            await self.queue.fail_task(task_id=task_id, lock_token=lock_token, error_message=str(e), **retry_options)
             return {
                 "task_id": str(task_id),
                 "status": "FAILED",
@@ -291,6 +237,6 @@ class TaskDispatcher:
         """Libera conexões e recursos dos pipelines."""
         self.is_running = False
         await self.dw_writer.close()
-        await self.daily_pipeline.dw_writer.close()
+        await self.daily_pipeline.close()
         await self.quarterly_pipeline.close()
         await self.monthly_pipeline.close()

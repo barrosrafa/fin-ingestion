@@ -18,10 +18,20 @@ class B3Collector(BaseCollector):
         super().__init__(name="b3", base_url="https://sistemaswebb3-listados.b3.com.br")
         self.recent_daily_quotes = []
 
+    async def get_daily_quotes(self, reference_date):
+        url = "https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_D" + reference_date.strftime("%d%m%Y") + ".ZIP"
+        response = await self.http_client.get(url)
+        response.raise_for_status()
+        await self.raw_sink.save_payload(self.name, url, response.content, mime_type="application/zip")
+        records = [r for r in self.parse(response.content) if r["tipo_mercado"] == 10]
+        if any(r["data_pregao"] != reference_date.isoformat() for r in records):
+            raise ValueError("COTAHIST returned a different session date")
+        return records
+
     async def get_recent_traded_tickers(self) -> list[str]:
         """Universo spot negociado no último arquivo diário publicado pela B3."""
         today = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
-        for offset in range(1, 11):
+        for offset in range(0, 11):
             day = today - timedelta(days=offset)
             if day.weekday() >= 5:
                 continue
@@ -32,19 +42,19 @@ class B3Collector(BaseCollector):
             response.raise_for_status()
             if not response.content.startswith(b"PK"):
                 continue
-            with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-                with archive.open(archive.namelist()[0]) as data:
-                    self.recent_daily_quotes = [
-                        self.parse_cothist_line(line.decode("latin1").rstrip("\r\n"))
-                        for line in data
-                        if line.startswith(b"01") and line[24:27] == b"010"
-                    ]
-                    for quote in self.recent_daily_quotes:
-                        factor = quote["fator_cotacao"]
-                        if factor != 1:
-                            for key in ("preco_abertura", "preco_maximo", "preco_minimo", "preco_medio", "preco_fechamento"):
-                                quote[key] /= factor
-                    tickers = {q["ticker"] for q in self.recent_daily_quotes}
+            await self.raw_sink.save_payload(
+                source=self.name, endpoint=url, payload=response.content,
+                mime_type="application/zip", metadata={"data_pregao": day.isoformat()},
+            )
+            self.recent_daily_quotes = [q for q in self.parse(response.content) if q["tipo_mercado"] == 10]
+            for quote in self.recent_daily_quotes:
+                factor = quote["fator_cotacao"]
+                if factor <= 0:
+                    raise ValueError("COTAHIST quotation factor must be positive")
+                if factor != 1:
+                    for key in ("preco_abertura", "preco_maximo", "preco_minimo", "preco_medio", "preco_fechamento"):
+                        quote[key] /= factor
+            tickers = {q["ticker"] for q in self.recent_daily_quotes}
             if tickers:
                 return sorted(tickers)
         raise RuntimeError("Nenhum arquivo COTAHIST diário disponível nos últimos dez dias")
@@ -52,6 +62,15 @@ class B3Collector(BaseCollector):
     async def extract(self, **kwargs: Any) -> Any:
         endpoint = kwargs.get("endpoint", "index_portfolio")
         index_name = kwargs.get("index", "IBOV")
+
+        if endpoint == "cotahist":
+            year = int(kwargs["year"])
+            if not 1986 <= year <= datetime.now(ZoneInfo("America/Sao_Paulo")).year:
+                raise ValueError("Invalid annual COTAHIST year")
+            url = f"https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A{year}.ZIP"
+            response = await self.http_client.get(url)
+            response.raise_for_status()
+            return response.content
 
         if endpoint == "index_portfolio":
             encoded = base64.b64encode(json.dumps({
@@ -71,6 +90,20 @@ class B3Collector(BaseCollector):
         raise ValueError(f"Endpoint não suportado para B3: {endpoint}")
 
     def parse(self, raw_data: Any) -> list[dict[str, Any]]:
+        if isinstance(raw_data, bytes):
+            if raw_data.startswith(b"PK"):
+                with zipfile.ZipFile(io.BytesIO(raw_data)) as archive:
+                    if sum(info.file_size for info in archive.infolist()) > 512 * 1024 * 1024:
+                        raise ValueError("COTAHIST uncompressed size exceeds 512 MiB")
+                    records = []
+                    for info in archive.infolist():
+                        if info.filename.lower().endswith(".txt"):
+                            with archive.open(info) as stream:
+                                for line in stream:
+                                    if line.startswith(b"01"):
+                                        records.append(self.parse_cothist_line(line.decode("latin1").rstrip("\r\n")))
+                    return records
+            return self.parse(raw_data.decode("latin1").splitlines())
         if isinstance(raw_data, dict) and "results" in raw_data:
             records = []
             for item in raw_data["results"]:
@@ -93,6 +126,8 @@ class B3Collector(BaseCollector):
     @staticmethod
     def parse_cothist_line(line: str) -> dict[str, Any]:
         """Faz o parsing exato do padrão posicional da B3 (COTAHIST Registro tipo 01)."""
+        if len(line) != 245 or not line.startswith("01"):
+            raise ValueError("COTAHIST requires a 245-character type-01 record")
         data_pregao_str = line[2:10].strip()
         data_pregao = datetime.strptime(data_pregao_str, "%Y%m%d").date().isoformat()
 

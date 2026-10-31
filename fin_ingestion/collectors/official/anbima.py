@@ -12,27 +12,10 @@ class ANBIMACollector(BaseCollector):
         super().__init__(name="anbima", base_url="https://www.anbima.com.br")
 
     async def extract(self, **kwargs: Any) -> Any:
-        # Suporta parsing de payload ou mock estruturado de arquivo msYYMMDD.txt
-        return kwargs.get("data", [
-            {
-                "codigo_selic": "100000",
-                "titulo": "LTN",
-                "data_vencimento": "2027-01-01",
-                "taxa_indicativa": 11.45,
-                "pu_indicativo": 820.50,
-                "intervalo_min": 11.40,
-                "intervalo_max": 11.50,
-            },
-            {
-                "codigo_selic": "216198",
-                "titulo": "NTN-B",
-                "data_vencimento": "2035-05-15",
-                "taxa_indicativa": 6.35,
-                "pu_indicativo": 4120.30,
-                "intervalo_min": 6.30,
-                "intervalo_max": 6.40,
-            },
-        ])
+        # Explicit offline payloads are supported; never fabricate a live market result.
+        if "data" not in kwargs:
+            raise NotImplementedError("ANBIMA Feed requer integração autenticada; forneça data para parsing offline")
+        return kwargs["data"]
 
     def parse(self, raw_data: Any) -> list[dict[str, Any]]:
         if not isinstance(raw_data, list):

@@ -5,6 +5,7 @@ and reconciles US Stocks/REITs with withholding tax parameters.
 """
 
 import logging
+import math
 from datetime import date
 from typing import Any
 
@@ -21,12 +22,14 @@ class PtaxExchangeRatePipeline:
         self,
         target_date: date,
         moeda_origem: str = "USD",
-        taxa_compra: float = 5.3520,
-        taxa_venda: float = 5.3526,
+        taxa_compra: float | None = None,
+        taxa_venda: float | None = None,
     ) -> dict[str, Any]:
         """
         Stores daily official PTAX exchange rate for foreign asset valuation.
         """
+        if any(value is None or not math.isfinite(value) or value <= 0 for value in (taxa_compra, taxa_venda)):
+            raise ValueError("PTAX requires explicit positive official purchase and sale rates")
         if not self.db_pool:
             raise RuntimeError("Database pool not initialized")
 

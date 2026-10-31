@@ -6,6 +6,7 @@ import structlog
 
 from fin_ingestion.collectors.official.b3 import B3Collector
 from fin_ingestion.collectors.official.bcb import BCBCollector
+from fin_ingestion.dw.silver_writer import SilverWriter
 
 logger = structlog.get_logger(__name__)
 
@@ -16,6 +17,7 @@ class Oceans14MacroMarketPipeline:
     def __init__(self) -> None:
         self.bcb = BCBCollector()
         self.b3 = B3Collector()
+        self.writer = SilverWriter()
 
     async def run(self, tickers: list[str] | None = None) -> dict[str, Any]:
         from fin_ingestion.pipelines.result import summarize_results
@@ -23,10 +25,19 @@ class Oceans14MacroMarketPipeline:
         try:
             for key in self.bcb.SERIES_MAP:
                 results[key] = await self.bcb.run(serie=key, ultimos=12)
-            return summarize_results("macro_market", results)
+            from fin_ingestion.pipelines.result import require_complete_result
+            summary=summarize_results("macro_market", results)
+            require_complete_result(summary)
+            records=[{"series_code":r["serie_id"],"series_name":r["serie_nome"],
+                      "reference_date":r["data"],"value":r["valor"]}
+                     for result in results.values() for r in result.data]
+            summary["records_loaded"]=await self.writer.write_records("sgs",records)
+            summary["watermark_date"]=min(r["reference_date"] for r in records)
+            return summary
         finally:
             await self.bcb.close()
             await self.b3.close()
+            await self.writer.close()
 
     async def collect_macro_credit_indicators(self, ultimos: int = 12) -> dict[str, list[dict[str, Any]]]:
         """Coleta séries temporais do Bacen SGS para crédito, poupança, contas públicas e TCR."""

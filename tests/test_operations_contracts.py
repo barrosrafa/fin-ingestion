@@ -30,8 +30,10 @@ async def test_monthly_accepts_cli_tickers():
 @pytest.mark.asyncio
 async def test_macro_has_executable_entrypoint():
     pipeline = Oceans14MacroMarketPipeline()
-    pipeline.bcb.run = AsyncMock(return_value=CollectorResult(source='bcb',success=True,records_count=1,data=[{'data':'2026-01-01','valor':1}]))
+    pipeline.bcb.run = AsyncMock(return_value=CollectorResult(source='bcb',success=True,records_count=1,data=[{'data':'2026-01-01','valor':1,'serie_id':11,'serie_nome':'selic_over'}]))
     pipeline.bcb.close = AsyncMock()
+    pipeline.writer.write_records = AsyncMock(return_value=1)
+    pipeline.writer.close = AsyncMock()
     pipeline.b3.close = AsyncMock()
     result = await pipeline.run(tickers=None)
     assert result['total_records'] > 0

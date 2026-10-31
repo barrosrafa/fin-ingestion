@@ -24,7 +24,7 @@ class DataQualityValidator:
 
         try:
             close_val = Decimal(str(c))
-            if close_val <= 0:
+            if not close_val.is_finite() or close_val <= 0:
                 return False, f"Preço de fechamento não positivo: {close_val}", False
         except Exception:
             return False, f"Preço de fechamento inválido: {c}", False
@@ -32,6 +32,21 @@ class DataQualityValidator:
         open_raw = quote.get("preco_abertura")
         high_raw = quote.get("preco_maximo")
         low_raw = quote.get("preco_minimo")
+
+        # Validate even partial candles, including NaN/Infinity and negative volumes.
+        for field in ("preco_abertura", "preco_maximo", "preco_minimo", "preco_medio",
+                      "volume_total", "volume_financeiro", "quantidade_negocios", "numero_negocios"):
+            value = quote.get(field)
+            if value is None:
+                continue
+            try:
+                number = Decimal(str(value))
+                if not number.is_finite() or number < 0 or (field.startswith("preco_") and number == 0):
+                    return False, f"Valor inválido em {field}: {value}", False
+                if field in {"quantidade_negocios", "numero_negocios"} and number != number.to_integral_value():
+                    return False, f"Contagem fracionária em {field}: {value}", False
+            except Exception:
+                return False, f"Valor inválido em {field}: {value}", False
 
         # Se houver candle OHLC completo, valida consistência geométrica
         if open_raw is not None and high_raw is not None and low_raw is not None:
@@ -54,6 +69,8 @@ class DataQualityValidator:
         if var is not None:
             try:
                 var_val = Decimal(str(var))
+                if not var_val.is_finite():
+                    return False, "Variação não finita", False
                 if abs(var_val) > 50.0:
                     return (
                         False,
@@ -61,6 +78,6 @@ class DataQualityValidator:
                         True,
                     )
             except Exception:
-                pass
+                return False, "Variação inválida", False
 
         return True, None, False

@@ -1,0 +1,76 @@
+name: Deploy scheduled engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      reference_date:
+        description: 'Referência explícita do canário (YYYY-MM-DD); vazio usa a data BRT'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+  deployments: write
+
+concurrency:
+  group: fin-ingestion-operations
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: production-ingestion
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_URL_ASYNC: ${{ secrets.DATABASE_URL_ASYNC }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      BRAPI_API_KEY: ${{ secrets.BRAPI_API_KEY }}
+      PROVIDER_MONTHLY_CREDITS: ${{ vars.PROVIDER_MONTHLY_CREDITS || '{"brapi":1000}' }}
+      INTRADAY_TICKERS: ${{ vars.ENGINE_INTRADAY_TICKERS || '["PETR4"]' }}
+      CVM_CNPJS: ${{ vars.ENGINE_CVM_CNPJS || '["33000167000101"]' }}
+      INGESTION_ENV: production
+      DISTRIBUTED_SOURCE_CONTROLS: 'true'
+      PYTHONUNBUFFERED: '1'
+      RAW_LANDING_BACKEND: local
+      RAW_LANDING_DIR: data/bronze
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require successful CI for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run list --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --event push --json name,conclusion > /tmp/ci.json
+          python - <<'PY'
+          import json
+          runs=json.load(open('/tmp/ci.json'))
+          assert any(r['name']=='CI, Quality Audit & Scheduled Maintenance' and r['conclusion']=='success' for r in runs), 'Exact-commit CI must pass before deployment'
+          PY
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --python 3.12 --frozen --no-dev
+      - name: Verify and apply the immutable engine migration contract
+        run: uv run --frozen --no-dev python scripts/apply_engine_migrations.py --db-repo tests/schema_contract --apply
+      - name: Deploy and verify official sources, authenticated brapi and Gold
+        env:
+          REFERENCE_DATE: ${{ inputs.reference_date }}
+        run: |
+          ARGS=()
+          if [ -n "$REFERENCE_DATE" ]; then ARGS=(--reference-date "$REFERENCE_DATE"); fi
+          uv run --frozen --no-dev python -m fin_ingestion.operations.production deploy "${ARGS[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engine-deployment-${{ github.sha }}
+          path: |
+            data/deployment.json
+            dbt/target/run_results.json
+            dbt/logs/dbt.log
+            data/bronze/
+          retention-days: 7
+          if-no-files-found: warn

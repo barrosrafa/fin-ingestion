@@ -1,0 +1,8 @@
+{
+  "tests_exit_code": 0,
+  "test_output": [
+    "172 passed in 47.15s"
+  ],
+  "redis": "isolated-real-server",
+  "postgres": "pgserver ephemeral PostgreSQL 16.2"
+}

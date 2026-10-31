@@ -1,0 +1,28 @@
+{
+  "evidence_kind": "compiled_from_verified_live_runs",
+  "environment": "isolated PostgreSQL 16.2 + Redis 7.2",
+  "brapi": {
+    "authenticated": true,
+    "account_plan": "free",
+    "account_limit_reported": 15000,
+    "ticker": "PETR4",
+    "snapshot_rows_after_replay": 1,
+    "stale_current_quote_rejected": true
+  },
+  "public_sources": {
+    "ptax": 5,
+    "focus": 320,
+    "tesouro": 58,
+    "sgs": 25,
+    "b3_eod": 1,
+    "cvm_dfp_petrobras": 2238
+  },
+  "cvm_dfp_archive_rows_parsed": 1175979,
+  "dbt_selected_build_exit_code": 0,
+  "commercial_without_authenticated_live_homologation": [
+    "massive",
+    "fmp",
+    "twelve_data",
+    "anbima_feed"
+  ]
+}

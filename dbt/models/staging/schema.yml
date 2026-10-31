@@ -1,6 +1,12 @@
 version: 2
 
 sources:
+  - name: canonical
+    schema: canonical
+    tables:
+      - name: cvm_statement_latest
+      - name: corporate_action_latest
+      - name: provider_record
   - name: raw
     schema: raw
     tables:
@@ -32,6 +38,12 @@ sources:
     tables:
       - name: cotacao_diaria
       - name: provento
+      - name: nominal_bar
+      - name: ptax_observation
+      - name: treasury_quote
+      - name: focus_expectation
+      - name: debenture_quote
+      - name: sgs_observation
 
 models:
   - name: stg_b3_cotacoes

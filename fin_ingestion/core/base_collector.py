@@ -25,6 +25,7 @@ class CollectorResult:
     data: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     execution_time_seconds: float = 0.0
+    retry_after_seconds: int | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -69,14 +70,18 @@ class BaseCollector(ABC):
 
         try:
             raw_data = await self.extract(**kwargs)
+            landing = raw_data.get("content") if isinstance(raw_data, dict) and isinstance(raw_data.get("content"), bytes) else raw_data
             raw_id = await self.raw_sink.save_payload(
                 source=self.name,
                 endpoint=str(kwargs.get("endpoint", "default")),
-                payload=raw_data if isinstance(raw_data, (dict, list)) else {"raw": str(raw_data)},
+                payload=landing if isinstance(landing, (dict, list, bytes, str)) else {"raw": str(landing)},
+                mime_type="application/octet-stream" if isinstance(landing, bytes) else "application/json",
                 metadata=kwargs,
             )
 
             records = self.parse(raw_data)
+            if not records:
+                raise ValueError(f"{self.name}: nenhuma linha válida extraída")
             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
             logger.info(
@@ -102,5 +107,6 @@ class BaseCollector(ABC):
                 success=False,
                 records_count=0,
                 errors=[str(e)],
+                retry_after_seconds=getattr(e, "retry_after", None),
                 execution_time_seconds=duration,
             )

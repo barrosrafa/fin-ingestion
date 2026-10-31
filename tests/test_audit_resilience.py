@@ -7,6 +7,7 @@ import httpx
 import pytest
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError
+from tenacity import wait_none
 
 from fin_ingestion.core.circuit_breaker import CircuitBreakerOpenError, CircuitState
 from fin_ingestion.core.distributed_controls import DistributedSourceControls
@@ -34,7 +35,8 @@ def test_invalid_rate_rejected(rate, burst):
         (403, AuthenticationBlockedError),
     ],
 )
-async def test_errors_count_once_and_stop_on_block(method, status, error):
+async def test_errors_count_once_and_stop_on_block(method, status, error, monkeypatch):
+    monkeypatch.setattr(ResilientHttpClient.get.retry, "wait", wait_none())
     client = ResilientHttpClient("test")
     client._client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: httpx.Response(status, request=request))
@@ -47,7 +49,7 @@ async def test_errors_count_once_and_stop_on_block(method, status, error):
             with pytest.raises(CircuitBreakerOpenError):
                 await getattr(client, method)("https://example.test")
         else:
-            assert client.circuit_breaker.failure_count == 1
+            assert client.circuit_breaker.failure_count == (3 if method == "get" and status == 503 else 1)
     finally:
         await client.close()
 

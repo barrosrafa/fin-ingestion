@@ -5,12 +5,14 @@ import asyncio
 import hashlib
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 import asyncpg
 import structlog
 
 from fin_ingestion.config import settings
+from fin_ingestion.core.local_archive import LocalRawArchive
 
 logger = structlog.get_logger(__name__)
 
@@ -18,8 +20,11 @@ logger = structlog.get_logger(__name__)
 class RawSink:
     """Grava payloads brutos em raw.payload vinculado a um lote em raw.ingestion_batch com hash SHA-256."""
 
-    def __init__(self, db_url: str | None = None) -> None:
-        self.db_url = db_url or settings.database_url_async.replace("postgresql+asyncpg://", "postgresql://")
+    def __init__(self, db_url: str | None = None, backend: str | None = None) -> None:
+        self.backend = backend
+        self.db_url = db_url or settings.database_url_async.replace(
+            "postgresql+asyncpg://", "postgresql://"
+        )
         self._pool: asyncpg.Pool | None = None
         self._pool_lock = asyncio.Lock()
 
@@ -103,9 +108,24 @@ class RawSink:
 
         payload_hash = hashlib.sha256(payload_bytes).hexdigest()
         source_url = f"{source}://{endpoint}"
-        meta = metadata or {}
+        meta = dict(metadata or {})
         meta["source"] = source
         meta["endpoint"] = endpoint
+
+        if (self.backend or settings.raw_landing_backend) == "local":
+            archive = LocalRawArchive(settings.raw_landing_dir)
+            return await asyncio.to_thread(
+                archive.save,
+                payload_bytes,
+                {
+                    **meta,
+                    "http_status": status_code,
+                    "mime_type": mime_type,
+                    "encoding": encoding,
+                    "batch_id": batch_id,
+                    "captured_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
 
         pool = await self.get_pool()
         async with pool.acquire() as conn:
@@ -152,4 +172,3 @@ class RawSink:
                 sha256=payload_hash,
             )
             return saved_id
-

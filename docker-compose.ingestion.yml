@@ -15,6 +15,8 @@ services:
       - LOG_LEVEL=INFO
       - REDIS_URL=${REDIS_URL:?Set REDIS_URL to the shared Redis instance}
       - DISTRIBUTED_SOURCE_CONTROLS=true
+      - INTRADAY_ENABLED=${INTRADAY_ENABLED:-false}
+      - INTRADAY_TICKERS=${INTRADAY_TICKERS:-[]}
     networks:
       - fin-network
 
@@ -31,10 +33,35 @@ services:
       - LOG_LEVEL=INFO
       - REDIS_URL=${REDIS_URL:?Set REDIS_URL to the shared Redis instance}
       - DISTRIBUTED_SOURCE_CONTROLS=true
+      - WORKER_DATASETS=["cotacao_diaria","b3_daily_quotes","demonstrativo_financeiro","dfp","itr","cvm_quarterly_dfp","informe_mensal_fii","fii_rendimentos","cvm_fii_monthly","serie_macro","bcb_macro_series","taxa_anbima","anbima_indicativos","etf_taxas_nav","etfs_brasil_taxas","cota_fundo_investimento","cvm_funds_daily","cadastro_instrumento","b3_instrument_cad","ptax","focus","tesouro","anbima_feed","cvm_dfp","cvm_itr","market_eod","sgs","b3_history","massive","fmp","twelve_data"]
+      - PROVIDER_MONTHLY_CREDITS=${PROVIDER_MONTHLY_CREDITS:?Set explicit credit ceilings}
+      - BRAPI_API_KEY=${BRAPI_API_KEY:-}
+      - BRAPI_RAW_HISTORY=${BRAPI_RAW_HISTORY:-false}
+      - MASSIVE_API_KEY=${MASSIVE_API_KEY:-}
+      - FMP_API_KEY=${FMP_API_KEY:-}
+      - TWELVE_DATA_API_KEY=${TWELVE_DATA_API_KEY:-}
+      - ANBIMA_CLIENT_ID=${ANBIMA_CLIENT_ID:-}
+      - ANBIMA_CLIENT_SECRET=${ANBIMA_CLIENT_SECRET:-}
     deploy:
       replicas: 2
     networks:
       - fin-network
+
+  ingestion-intraday-worker:
+    profiles: [intraday]
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "fin_ingestion.workers.runner"]
+    environment:
+      DATABASE_URL_ASYNC: ${DATABASE_URL_ASYNC}
+      REDIS_URL: ${REDIS_URL:?Shared Redis required}
+      DISTRIBUTED_SOURCE_CONTROLS: "true"
+      WORKER_DATASETS: '["cotacao_intraday"]'
+      INTRADAY_ENABLED: ${INTRADAY_ENABLED:-false}
+      BRAPI_API_KEY: ${BRAPI_API_KEY:-}
+      PROVIDER_MONTHLY_CREDITS: ${PROVIDER_MONTHLY_CREDITS:?Set explicit credit ceilings}
+      INTRADAY_MAX_AGE_SECONDS: ${INTRADAY_MAX_AGE_SECONDS:-1200}
+    networks: [fin-network]
 
 networks:
   fin-network:

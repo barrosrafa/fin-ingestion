@@ -2,6 +2,16 @@
 
 Pipeline de dados resiliente e modular para coleta, enriquecimento, cálculos analíticos e transformação dbt para o ecossistema **`fin`**, cobrindo órgãos oficiais e regulatórios (B3, CVM, BCB, ANBIMA) e 12 plataformas líderes de análise de investimentos no Brasil.
 
+O estado efetivo dos conectores e a evolução por fases estão no
+[plano de desenvolvimento](docs/PLANO_EVOLUCAO_SCHEDULED_PIPELINE.md).
+O estado de implantação e as evidências estão no
+[registro de execução e homologação](docs/EXECUCAO_ENGINE_2026-10-30.md).
+O [deploy de produção no GitHub Actions](docs/DEPLOY_ENGINE.md) adiciona canário,
+release fixada por SHA e agenda independente do Docker local.
+Os conectores autenticados e o intraday dedicado estão implementados. A habilitação
+exige credenciais, teto de créditos e migração homologada. O intraday aceita somente
+timestamps reais dentro da defasagem configurada; cotações EOD não substituem esse fluxo.
+
 - **Repositório:** `https://github.com/barrosrafa/fin-ingestion`
 - **Banco de Dados Relacionado:** `https://github.com/barrosrafa/fin-db` (PostgreSQL 18 / TimescaleDB no Neon)
 - **Especificação REA:** [`docs/REA_SPECIFICATION.md`](docs/REA_SPECIFICATION.md)
@@ -121,6 +131,41 @@ uv run ruff check .
 uv run ruff format .
 ```
 
+### Agendamento, validação e replay Bronze
+
+O scheduler PostgreSQL interpreta `ingestion.ingestion_policy.cron_expression` em
+`America/Sao_Paulo`, com cinco campos. Enfileira a ocorrência mais recente vencida no dia,
+usando uma chave UTC por ocorrência. Varreduras repetidas não duplicam tarefas; após
+indisponibilidade, não tenta recuperar automaticamente todo o histórico de ocorrências.
+O calendário B3 existente é uma tabela de 2026 e precisa de revisão oficial antes de
+produção em outros anos. `BUSINESS_DAYS` significa segunda a sexta; os feriados B3 são
+aplicados apenas ao calendário `B3_TRADING_DAYS`.
+
+Lotes diários inválidos falham antes da gravação no writer. Candles completos passam
+pelo schema Pandera; observações intraday exigem timestamp explícito com fuso (ou
+`source_timezone` explícito). Resultado parcial/vazio não avança o checkpoint da fila.
+O preenchimento progressivo é uma função analítica opt-in, limitada a três observações;
+a ingestão não preenche lacunas automaticamente.
+
+Para Bronze local, configure `RAW_LANDING_BACKEND=local` e `RAW_LANDING_DIR=./data/bronze`.
+O padrão continua sendo PostgreSQL. Os objetos locais preservam os bytes e verificam
+SHA-256 no replay; cada captura tem um manifesto separado.
+
+```bash
+# Replay offline: cria um JSON novo, sem chamar APIs nem gravar no banco.
+uv run fin-ingestion raw-replay /caminho/sha256.bin --source b3 --output cotahist.json
+uv run fin-ingestion raw-replay /caminho/sha256.bin --source bcb --serie-id 11 --output sgs.json
+```
+
+O histórico SGS aceita `BCBCollector.run(serie="ipca", start_date="2000-01-01",
+end_date="2026-10-30")` na API Python, fatiando o período em janelas de até três anos.
+Cada resposta histórica é preservada antes do merge ordenado/deduplicado. `run` executa
+coleta real e Bronze; para parsing offline, use `raw-replay`.
+
+Créditos ponderados podem ser passados em `ResilientHttpClient.get/post(cost=...)`.
+Configure o bucket para comportar o maior custo permitido. Essa proteção controla vazão;
+ela não substitui medição ou bloqueio de orçamento mensal do provedor.
+
 ---
 
 ## 🤖 Automação em Nuvem Gratuita (GitHub Actions)
@@ -133,7 +178,7 @@ Horários de Brasília (UTC−3), configurados em UTC no workflow:
 
 - **Seg–sex, 06:00** (`0 9 * * 1-5`): descoberta/cadastro de companhias da CVM.
 - **Seg–sex, 12:00** (`0 15 * * 1-5`): informes mensais oficiais de FIIs da CVM, última referência/versão por classe.
-- **Seg–sex, 18:00** (`0 21 * * 1-5`): mercado diário, indicadores e transformação/validação dbt.
+- **Seg–sex, 19:00** (`0 22 * * 1-5`): mercado diário, indicadores e transformação/validação dbt.
 - **Domingo, 20:00** (`0 23 * * 0`): reconciliação da fila e enriquecimento dos ativos negociados.
 - **Disparo manual**: Actions → **CI, Quality Audit & Scheduled Maintenance** → **Run workflow**.
 

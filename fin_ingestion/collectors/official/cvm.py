@@ -2,8 +2,10 @@
 
 import csv
 import io
+import re
 import zipfile
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from fin_ingestion.core.base_collector import BaseCollector
@@ -17,6 +19,17 @@ class CVMCollector(BaseCollector):
 
     async def extract(self, **kwargs: Any) -> Any:
         endpoint = kwargs.get("endpoint", "cad_cia_aberta")
+
+        if endpoint == "financials":
+            filing, year = kwargs.get("filing", "dfp"), int(kwargs.get("year", datetime.now().year))
+            if filing not in {"dfp", "itr"} or not 1990 <= year <= datetime.now().year:
+                raise ValueError("Invalid CVM filing or year")
+            path = f"/dados/CIA_ABERTA/DOC/{filing.upper()}/DADOS/{filing}_cia_aberta_{year}.zip"
+            response = await self.http_client.get(path)
+            response.raise_for_status()
+            await self.raw_sink.save_payload(self.name, path, response.content, mime_type="application/zip")
+            return {"endpoint": "financials", "filing": filing, "content": response.content,
+                    "cnpjs": kwargs.get("cnpjs")}
 
         if endpoint == "cad_cia_aberta":
             url = "/dados/CIA_ABERTA/CAD/DADOS/cad_cia_aberta.csv"
@@ -51,6 +64,34 @@ class CVMCollector(BaseCollector):
         raise ValueError(f"Endpoint não suportado para CVM: {endpoint}")
 
     def parse(self, raw_data: Any) -> list[dict[str, Any]]:
+        if isinstance(raw_data, dict) and raw_data.get("endpoint") == "financials":
+            records = []
+            selected=set(raw_data.get("cnpjs") or [])
+            with zipfile.ZipFile(io.BytesIO(raw_data["content"])) as archive:
+                if sum(info.file_size for info in archive.infolist()) > 512 * 1024 * 1024:
+                    raise ValueError("CVM ZIP exceeds uncompressed safety limit")
+                for info in archive.infolist():
+                    match = re.fullmatch(r"(?:dfp|itr)_cia_aberta_(.+)_(con|ind)_\d{4}\.csv", info.filename, re.I)
+                    if not match:
+                        continue
+                    statement, scope = match.groups()
+                    with archive.open(info) as stream:
+                        for row in csv.DictReader(io.TextIOWrapper(stream, encoding="latin1"), delimiter=";"):
+                            cnpj=re.sub(r"\D", "", row["CNPJ_CIA"])
+                            if selected and cnpj not in selected:
+                                continue
+                            amount = Decimal(row["VL_CONTA"].replace(",", "."))
+                            if not amount.is_finite():
+                                raise ValueError("Non-finite CVM amount")
+                            records.append({"cnpj": re.sub(r"\D", "", row["CNPJ_CIA"]),
+                                            "filing": raw_data["filing"], "statement": statement.upper(), "scope": scope.lower(),
+                                            "reference_date": row["DT_REFER"], "version": int(row["VERSAO"]),
+                                            "account": row["CD_CONTA"], "period_start": row.get("DT_INI_EXERC") or "not_applicable",
+                                            "period_end": row.get("DT_FIM_EXERC") or row["DT_REFER"],
+                                            "exercise_order": row["ORDEM_EXERC"], "currency": row["MOEDA"],
+                                            "scale": row["ESCALA_MOEDA"], "amount": amount,
+                                            "description": row["DS_CONTA"], "payload": row, "source": "cvm"})
+            return records
         if isinstance(raw_data, dict) and raw_data.get("endpoint") == "fii_informe_mensal":
             def number(value):
                 return float(value) if value not in (None, "") else None

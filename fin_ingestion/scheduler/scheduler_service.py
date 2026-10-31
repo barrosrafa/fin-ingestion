@@ -1,11 +1,13 @@
 """Serviço de agendamento autônomo baseado em políticas e calendários de mercado."""
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import asyncpg
 import structlog
+from croniter import croniter
 
+from fin_ingestion.config import settings
 from fin_ingestion.queue.reconciler import IngestionReconciler
 from fin_ingestion.queue.task_queue import PostgresTaskQueue
 from fin_ingestion.scheduler.market_calendar import TZ_SP, MarketCalendar
@@ -22,15 +24,18 @@ class IngestionSchedulerService:
         self.reconciler = IngestionReconciler(pool=pool)
         self.is_running = False
 
-    async def evaluate_and_dispatch(self) -> int:
+    async def evaluate_and_dispatch(self, now: datetime | None = None) -> int:
         """Avalia políticas ativas e gera tarefas pendentes necessárias."""
-        now_sp = datetime.now(TZ_SP)
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("Scheduler requires a timezone-aware instant")
+        now_sp = now.astimezone(TZ_SP)
         today = now_sp.date()
         tasks_created = 0
 
         # 1. Recupera políticas ativas
         query_policies = """
-        SELECT policy_id, dataset_name, source_name, calendar_type, priority
+        SELECT policy_id, dataset_name, source_name, calendar_type, priority, cron_expression
         FROM ingestion.ingestion_policy
         WHERE is_active = TRUE;
         """
@@ -43,29 +48,49 @@ class IngestionSchedulerService:
             cal_type = p["calendar_type"]
             priority = p["priority"]
 
+            # The current daily route cannot supply genuine intraday observations.
+            if dataset == "cotacao_intraday":
+                if (not settings.intraday_enabled or not settings.intraday_tickers
+                    or p["source_name"] != "brapi" or not MarketCalendar.is_b3_market_open(now_sp)):
+                    continue
+
             # Valida calendário
             if cal_type == "B3_TRADING_DAYS" and not MarketCalendar.is_b3_trading_day(today):
                 continue
+            if cal_type == "BUSINESS_DAYS" and today.weekday() >= 5:
+                continue
+            if cal_type not in {"B3_TRADING_DAYS", "BUSINESS_DAYS", "CALENDAR_DAYS"}:
+                logger.error("Calendário de política desconhecido", policy_id=policy_id)
+                continue
 
-            # Chave de idempotência do dia para tarefas diárias
-            task_key = f"{policy_id}:{today.isoformat()}"
+            # Most recent due occurrence today; no unbounded catch-up storm after downtime.
+            # DB policies use local BRT cron, independently of GitHub Actions UTC cron.
+            try:
+                expression = p["cron_expression"]
+                if len(expression.split()) != 5:
+                    raise ValueError("Only five-field cron expressions are supported")
+                occurrence = croniter(
+                    expression, now_sp.replace(second=0, microsecond=0) + timedelta(microseconds=1)
+                ).get_prev(datetime)
+            except (ValueError, KeyError, TypeError) as exc:
+                logger.error("Cron inválido", policy_id=policy_id, error=str(exc))
+                continue
+            if occurrence.date() != today:
+                continue
+            task_key = f"{policy_id}:{occurrence.astimezone(timezone.utc).isoformat()}"
 
             # Enfileira se ainda não existir
-            task_id = await self.queue.enqueue_task(
-                policy_id=policy_id,
-                task_key=task_key,
-                dataset_name=dataset,
-                reference_date=today,
-                priority=priority,
-            )
-            if task_id:
-                tasks_created += 1
-                logger.info(
-                    "Nova tarefa de ingestão enfileirada pelo agendador",
-                    policy_id=policy_id,
-                    task_key=task_key,
-                    task_id=str(task_id),
+            targets = settings.intraday_tickers if dataset == "cotacao_intraday" else [None]
+            for target in targets:
+                key = f"{task_key}:{target}" if target else task_key
+                task_id = await self.queue.enqueue_task(
+                    policy_id=policy_id, task_key=key, dataset_name=dataset,
+                    reference_date=today, priority=priority, target_entity=target,
                 )
+                if task_id:
+                    tasks_created += 1
+                    logger.info("Nova tarefa de ingestão enfileirada pelo agendador",
+                                policy_id=policy_id, task_key=key, task_id=str(task_id))
 
         # 2. Executa recuperação de tarefas zumbis
         await self.reconciler.recover_zombie_tasks()
@@ -74,6 +99,8 @@ class IngestionSchedulerService:
 
     async def run_forever(self, interval_seconds: int = 60) -> None:
         """Loop contínuo do serviço de agendamento em container Docker."""
+        if interval_seconds <= 0:
+            raise ValueError("Scheduler interval must be positive")
         self.is_running = True
         logger.info("Iniciando serviço de agendamento autônomo do fin-ingestion", interval_sec=interval_seconds)
 

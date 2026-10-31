@@ -71,6 +71,23 @@ class DailyMarketPipeline:
         concurrency: int = 10,
         include_secondary: bool = False,
     ) -> dict[str, Any]:
+        if concurrency <= 0:
+            raise ValueError("Daily concurrency must be positive")
+        try:
+            return await self._run(tickers, limit, offset, concurrency, include_secondary)
+        finally:
+            await self.close()
+
+    async def close(self) -> None:
+        await asyncio.gather(
+            self.b3.close(), self.bcb.close(), self.status_invest.close(),
+            self.advfn.close(), self.dw_writer.close(),
+        )
+
+    async def _run(
+        self, tickers: list[str] | None, limit: int | None, offset: int,
+        concurrency: int, include_secondary: bool,
+    ) -> dict[str, Any]:
         target_tickers = tickers or await self.get_active_universe(limit=limit, offset=offset)
         if not target_tickers:
             raise RuntimeError("Nenhum ticker ativo disponível para o fechamento diário")
@@ -144,57 +161,22 @@ class DailyMarketPipeline:
             written_quotes = await self.dw_writer.write_daily_quotes(quotes_to_persist)
             logger.info("Cotações persistidas com sucesso pelo DailyMarketPipeline", written=written_quotes)
 
-        # Uma observação pontual bloqueada não pode impedir a cotação OHLC pública.
-        quoted = {q["ticker"] for q in quotes_to_persist}
-        missing = [t for t in target_tickers if t not in quoted]
+        # Official same-session EOD replaces the previous public chart-feed fallback.
+        from datetime import datetime
+
+        from fin_ingestion.pipelines.market_gateway import MarketGateway
+        from fin_ingestion.scheduler.market_calendar import TZ_SP
+        missing = [t for t in target_tickers if t not in {q["ticker"] for q in quotes_to_persist}]
         fallback_failed = []
-        if missing:
-            from fin_ingestion.pipelines.historical_backfill import HistoricalBackfillPipeline
-            history = HistoricalBackfillPipeline(concurrency=8)
-            try:
-                pool = await history.get_pool()
-                async with pool.acquire() as conn:
-                    assets = await conn.fetch(
-                        "SELECT id_ativo,ticker,tipo_ativo::text AS tipo_ativo FROM core.ativo WHERE ticker=ANY($1::text[])", missing,
-                    )
-                sem = asyncio.Semaphore(8)
-
-                async def load_quote(asset):
-                    async with sem:
-                        parsed = await history.fetch_complete_history(asset["ticker"], asset["tipo_ativo"], days=10)
-                        if not parsed.get("success") or not parsed.get("candles"):
-                            return asset["ticker"], 0
-                        counts = await history.persist_asset_history(dict(asset), parsed)
-                        return asset["ticker"], counts["quotes_written"]
-
-                fallback_results = await asyncio.gather(*(load_quote(a) for a in assets), return_exceptions=True)
-                for asset, result in zip(assets, fallback_results):
-                    if isinstance(result, Exception) or not result[1]:
-                        fallback_failed.append(asset["ticker"])
-                        logger.warning("Cotação indisponível", ticker=asset["ticker"], error=str(result))
-                    else:
-                        written_quotes += result[1]
-                fallback_failed.extend(set(missing) - {a["ticker"] for a in assets})
-            finally:
-                await history.close()
-
         b3_fallback_date = None
-        if fallback_failed:
-            if not self.b3.recent_daily_quotes:
-                await self.b3.get_recent_traded_tickers()
-            official = [q for q in self.b3.recent_daily_quotes if q["ticker"] in fallback_failed]
-            if official:
-                written_quotes += await self.dw_writer.write_daily_quotes(official)
-                recovered = {q["ticker"] for q in official}
-                fallback_failed = [t for t in fallback_failed if t not in recovered]
-                b3_fallback_date = max(q["data_pregao"] for q in official)
-
-        # Fechamento de clientes
-        await self.b3.close()
-        await self.bcb.close()
-        await self.status_invest.close()
-        await self.advfn.close()
-        await self.dw_writer.close()
+        if missing:
+            gateway = MarketGateway()
+            try:
+                result = await gateway.eod(missing, datetime.now(TZ_SP).date())
+                written_quotes += result["records_loaded"]
+                b3_fallback_date = result["watermark_date"]
+            finally:
+                await gateway.close()
 
         if not written_quotes:
             raise RuntimeError("Fechamento diário sem cotações persistidas")
@@ -205,8 +187,10 @@ class DailyMarketPipeline:
             "pipeline": "daily_market",
             "failed_tickers": fallback_failed,
             "b3_fallback_date": b3_fallback_date,
+            "watermark_date": b3_fallback_date,
             "failed_sources": {name: r.errors for name, r in results.items() if not r.success},
-            "status": "PARTIAL" if fallback_failed else "SUCCEEDED",
+            "status": "PARTIAL" if fallback_failed or any(not r.success for r in results.values()) else "SUCCEEDED",
+            "retry_after_seconds": max((r.retry_after_seconds or 0 for r in results.values()), default=0) or None,
             "total_records": total_records,
             "quotes_written": written_quotes,
             "intraday_observations": intraday_observations_written,

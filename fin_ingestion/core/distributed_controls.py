@@ -12,10 +12,11 @@ BUCKET_LUA = """
 local t = redis.call('TIME')
 local now = tonumber(t[1]) + tonumber(t[2])/1000000
 local capacity, rate = tonumber(ARGV[1]), tonumber(ARGV[2])
+local cost = tonumber(ARGV[3]) or 1
 local d = redis.call('HMGET', KEYS[1], 'tokens', 'updated')
 local tokens = math.min(capacity, (tonumber(d[1]) or capacity) + math.max(0, now-(tonumber(d[2]) or now))*rate)
 local delay = 0
-if tokens >= 1 then tokens = tokens-1 else delay = (1-tokens)/rate end
+if tokens >= cost then tokens = tokens-cost else delay = (cost-tokens)/rate end
 redis.call('HSET', KEYS[1], 'tokens', tokens, 'updated', now)
 redis.call('EXPIRE', KEYS[1], math.ceil(capacity/rate)+60)
 return math.ceil(delay*1000)
@@ -70,10 +71,12 @@ class DistributedSourceControls:
         self.rate, self.capacity = rate, capacity
         self.threshold, self.cooldown = threshold, cooldown
 
-    async def before_request(self) -> int:
+    async def before_request(self, cost: float = 1.0) -> int:
+        if not isfinite(cost) or cost <= 0 or cost > self.capacity:
+            raise ValueError("Request cost must be positive and no greater than burst capacity")
         while True:
             delay = int(
-                await self.redis.eval(BUCKET_LUA, 1, self.bucket_key, self.capacity, self.rate)
+                await self.redis.eval(BUCKET_LUA, 1, self.bucket_key, self.capacity, self.rate, cost)
             )
             if delay == 0:
                 break

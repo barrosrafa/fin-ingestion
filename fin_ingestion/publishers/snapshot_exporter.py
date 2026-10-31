@@ -154,7 +154,7 @@ class SnapshotExporter:
             # 1. Informações Cadastrais
             ativo_row = await conn.fetchrow(
                 """
-                SELECT a.id_ativo, a.ticker, a.tipo_ativo, 
+                SELECT a.id_ativo, a.ticker, a.tipo_ativo,
                        e.nome_empresarial, e.cnpj, e.setor, e.subsetor, e.cnae
                 FROM core.ativo a
                 LEFT JOIN core.emissor_companhia e ON e.id_emissor = a.id_emissor
