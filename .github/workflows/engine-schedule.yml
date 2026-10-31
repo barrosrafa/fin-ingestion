@@ -2,25 +2,21 @@ name: Scheduled engine production
 
 on:
   schedule:
-    - cron: '0 12 * * 1-5'
-    - cron: '0 13-16 * * 1-5'
-    - cron: '30 16 * * 1-5'
-    - cron: '30 12 * * 1-5'
-    - cron: '0 21 * * 1-5'
-    - cron: '0 11 * * 6'
-    - cron: '*/15 13-20 * * 1-5'
+    # Delivery may be late: each cycle reconstructs all missing durable slots.
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
     inputs:
       profile:
         type: choice
-        options: [morning, ptax, treasury, cvm, intraday]
-        default: morning
+        options: [recover, morning, ptax, treasury, cvm, intraday, daily, monthly, discovery, reconcile]
+        default: recover
 
 permissions:
   contents: read
 
 concurrency:
   group: fin-ingestion-operations
+  queue: max
   cancel-in-progress: false
 
 jobs:
@@ -56,26 +52,23 @@ jobs:
       - name: Execute the due source profile
         env:
           MANUAL_PROFILE: ${{ inputs.profile }}
-          CRON: ${{ github.event.schedule }}
         run: |
-          PROFILE="$MANUAL_PROFILE"
-          if [ -z "$PROFILE" ]; then
-            case "$CRON" in
-              '0 12 * * 1-5') PROFILE=morning ;;
-              '0 13-16 * * 1-5'|'30 16 * * 1-5') PROFILE=ptax ;;
-              '30 12 * * 1-5'|'0 21 * * 1-5') PROFILE=treasury ;;
-              '0 11 * * 6') PROFILE=cvm ;;
-              '*/15 13-20 * * 1-5') PROFILE=intraday ;;
-              *) echo 'Unknown cron'; exit 1 ;;
-            esac
+          set -euo pipefail
+          PROFILE="${MANUAL_PROFILE:-recover}"
+          if [ "$PROFILE" = recover ]; then
+            uv run --frozen --no-dev python -m fin_ingestion.operations.reliable_runtime
+          else
+            uv run --frozen --no-dev python -m fin_ingestion.operations.production "$PROFILE"
           fi
-          uv run --frozen --no-dev python -m fin_ingestion.operations.production "$PROFILE"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: engine-runtime-${{ github.run_id }}
           path: |
             data/deployment.json
+            data/runtime/
+            dbt/target/run_results.json
+            dbt/logs/dbt.log
             data/bronze/
           retention-days: 7
           if-no-files-found: warn

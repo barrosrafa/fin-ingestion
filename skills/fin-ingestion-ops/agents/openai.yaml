@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fin Ingestion Ops"
+  short_description: "Configura e verifica a ingestão financeira"
+  default_prompt: "Use $fin-ingestion-ops para configurar o agendador gratuito, publicar a release e comprovar a recuperação dos jobs."

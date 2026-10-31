@@ -6,6 +6,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -20,9 +21,10 @@ from fin_ingestion.core.distributed_controls import DistributedSourceControls
 from fin_ingestion.dw.dw_writer import DWWriter
 from fin_ingestion.pipelines.market_gateway import MarketPipeline
 from fin_ingestion.pipelines.provider_pipeline import ProviderPipeline
+from fin_ingestion.pipelines.result import require_complete_result
 from fin_ingestion.scheduler.market_calendar import TZ_SP, MarketCalendar
 
-PROFILES = {"morning", "ptax", "treasury", "cvm", "intraday", "deploy"}
+PROFILES = {"morning", "ptax", "treasury", "cvm", "intraday", "deploy", "daily", "monthly", "discovery", "reconcile"}
 GOLD_MODELS = [
     "+fct_cvm_statement_v2",
     "fct_nominal_bar",
@@ -50,12 +52,16 @@ def datasets_for(profile: str, now: datetime) -> list[str]:
         )
     if profile == "cvm":
         return ["cvm_dfp", "cvm_itr"]
+    if profile in {"monthly", "discovery", "reconcile"}:
+        return [profile]
     if local.weekday() >= 5:
         return []
     if profile == "morning":
         return ["sgs", "focus"] if local.weekday() == 0 else ["sgs"]
     if not MarketCalendar.is_b3_trading_day(local.date()):
         return []
+    if profile == "daily":
+        return ["market_eod"]
     return ["ptax"] if profile == "ptax" else ["tesouro"]
 
 
@@ -98,7 +104,7 @@ async def brapi_preflight(pool):
         await collector.close()
 
 
-def build_gold():
+def build_gold(profile=None):
     parts = urlsplit(settings.database_url_async.replace("postgresql+asyncpg://", "postgresql://"))
     env = {
         **os.environ,
@@ -109,13 +115,64 @@ def build_gold():
         "DBT_DBNAME": unquote(parts.path.lstrip("/")),
         "DBT_SSLMODE": "require",
     }
-    for command in (["dbt", "deps"], ["dbt", "build", "--select", *GOLD_MODELS]):
+    models = GOLD_MODELS + {
+        "daily": ["+fct_cotacao_diaria"],
+        "monthly": ["+fct_fii_snapshot_mensal"],
+        "discovery": ["+dim_ativo"],
+    }.get(profile, [])
+    for command in (["dbt", "deps"], ["dbt", "build", "--select", *models]):
         subprocess.run(
-            [*command, "--project-dir", "dbt", "--profiles-dir", "dbt"], env=env, check=True
+            [*command, "--project-dir", "dbt", "--profiles-dir", "dbt"], env=env, check=True,
+            timeout=600,
         )
 
 
 async def run_dataset(dataset, day, pool, cnpjs):
+    if dataset == "market_eod":
+        from fin_ingestion.collectors.official.b3 import B3Collector
+        b3 = B3Collector()
+        try:
+            official = await b3.get_daily_quotes(day)
+        finally:
+            await b3.close()
+        universe = sorted({row["ticker"] for row in official})
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT ticker FROM core.ativo WHERE ticker=ANY($1::text[])", universe
+            )
+        tickers = sorted(row["ticker"] for row in rows)
+        if not tickers:
+            raise ValueError("No registered instruments in the official session universe")
+        result = await MarketPipeline(pool=pool).run(reference_date=day, tickers=tickers)
+        result["universe"] = {"official": len(universe), "registered": len(tickers),
+                              "unresolved": sorted(set(universe) - set(tickers))}
+        await asyncio.to_thread(
+            subprocess.run, [sys.executable, "-m", "fin_ingestion.cli", "compute-analytics"],
+            check=True, timeout=600,
+        )
+        return result
+    if dataset == "monthly":
+        from fin_ingestion.pipelines.monthly_fii_funds import MonthlyFIIFundsPipeline
+        pipeline = MonthlyFIIFundsPipeline()
+        # These legacy dbt models read raw.payload, so a local-only archive
+        # would leave Gold stale despite a successful download.
+        pipeline.cvm.raw_sink.backend = "postgres"
+        try:
+            return await pipeline.run()
+        finally:
+            await pipeline.close()
+    if dataset == "discovery":
+        from fin_ingestion.pipelines.quarterly_financials import QuarterlyFinancialsPipeline
+        pipeline = QuarterlyFinancialsPipeline()
+        pipeline.cvm.raw_sink.backend = "postgres"
+        try:
+            return await pipeline.run()
+        finally:
+            await pipeline.close()
+    if dataset == "reconcile":
+        from fin_ingestion.queue.reconciler import IngestionReconciler
+        recovered = await IngestionReconciler(pool).recover_zombie_tasks()
+        return {"status": "SUCCEEDED", "total_records": recovered, "records_loaded": 0}
     if dataset == "sgs":
         series = {}
         for name in ("selic_over", "meta_selic", "cdi", "ipca", "igpm"):
@@ -153,9 +210,11 @@ async def run_dataset(dataset, day, pool, cnpjs):
     raise RuntimeError("No PTAX bulletin available in the bounded reference window")
 
 
-async def execute(profile, reference_date=None, output=Path("data/deployment.json")):
+async def execute(profile, reference_date=None, output=Path("data/deployment.json"), scheduled_at=None):
     now = datetime.now(timezone.utc)
-    datasets = datasets_for(profile, now)
+    # Batch replay evaluates the original slot, even after midnight/weekend.
+    # Intraday always evaluates the current session, never invents a past quote.
+    datasets = datasets_for(profile, now if profile == "intraday" else (scheduled_at or now))
     day = reference_date or now.astimezone(TZ_SP).date()
     receipt = {
         "release": os.environ.get("ENGINE_EXECUTED_SHA", os.environ.get("GITHUB_SHA", "local")),
@@ -192,9 +251,12 @@ async def execute(profile, reference_date=None, output=Path("data/deployment.jso
                 started, monotonic = datetime.now(timezone.utc), time.monotonic()
                 try:
                     result = await run_dataset(dataset, day, pool, cnpjs)
+                    if dataset != "reconcile":
+                        require_complete_result(result)
                     status, error = "SUCCEEDED", None
                 except Exception as exc:
-                    result = {"error_type": type(exc).__name__}
+                    result = {"error_type": type(exc).__name__,
+                              "retry_after_seconds": getattr(exc, "retry_after", None)}
                     status, error = "FAILED", type(exc).__name__
                 receipt["results"][dataset] = {"status": status, **result}
                 async with pool.acquire() as audit:
@@ -215,9 +277,9 @@ async def execute(profile, reference_date=None, output=Path("data/deployment.jso
                 if any(r["status"] != "SUCCEEDED" for r in receipt["results"].values())
                 else "SUCCEEDED"
             )
-            if receipt["status"] == "SUCCEEDED" and profile != "intraday":
+            if receipt["status"] == "SUCCEEDED" and profile not in {"intraday", "reconcile"}:
                 try:
-                    await asyncio.to_thread(build_gold)
+                    await asyncio.to_thread(build_gold, profile)
                     receipt["gold"] = "SUCCEEDED"
                 except Exception as exc:
                     receipt.update(

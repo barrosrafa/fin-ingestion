@@ -5,15 +5,8 @@ on:
     branches: [main, "codex/**"]
   pull_request:
     branches: [main, "codex/**"]
-  schedule:
-    # Seg-Sex CVM Descoberta de Demonstrativos ITR/DFP (06:00 BRT = 09:00 UTC)
-    - cron: '0 9 * * 1-5'
-    # Seg-Sex FIIs Informes & Eventos (12:00 BRT = 15:00 UTC)
-    - cron: '0 15 * * 1-5'
-    # Seg-Sex Fechamento Diário de Mercado B3, Proventos e dbt (19:00 BRT = 22:00 UTC)
-    - cron: '0 22 * * 1-5'
-    # Domingo à noite para reconciliação e enriquecimento cadastral (20:00 BRT = 23:00 UTC)
-    - cron: '0 23 * * 0'
+  # Production schedules are owned exclusively by engine-schedule.yml and its
+  # PostgreSQL occurrence ledger. This workflow retains explicit manual tools.
   workflow_dispatch:
     inputs:
       action:
@@ -41,6 +34,7 @@ on:
 jobs:
   test:
     name: Code Quality & Automated Unit Tests
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -82,11 +76,11 @@ jobs:
   ops-execution:
     name: Execute Ingestion Maintenance
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    needs: [test]
     runs-on: ubuntu-latest
     timeout-minutes: 180
     concurrency:
       group: fin-ingestion-operations
+      queue: max
       cancel-in-progress: false
 
     env:
@@ -137,6 +131,10 @@ jobs:
 
           asyncio.run(verify())
           PYREDIS
+
+      - name: Wake database and verify a real session
+        timeout-minutes: 5
+        run: uv run --frozen --no-dev python -m fin_ingestion.operations.database_ready
 
       - name: Execute Schedule Action
         env:
@@ -192,6 +190,7 @@ jobs:
               test_sources)
                 uv run fin-ingestion test-sources
                 ;;
+              *) echo 'Unknown manual action'; exit 1 ;;
             esac
           elif [ "$CRON_TRIGGER" = "0 22 * * 1-5" ]; then
             echo "Executando fechamento diário de mercado B3 às 19:00 BRT (22:00 UTC)"
@@ -208,6 +207,9 @@ jobs:
             echo "Executando reconciliação semanal e enriquecimento cadastral (Domingo)"
             uv run fin-ingestion queue-reconcile
             uv run fin-ingestion enrich-metadata --limit 100
+          else
+            echo 'Unknown schedule trigger'
+            exit 1
           fi
 
       - name: Upload dbt diagnostics

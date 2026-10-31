@@ -15,6 +15,7 @@ permissions:
 
 concurrency:
   group: fin-ingestion-operations
+  queue: max
   cancel-in-progress: false
 
 jobs:
@@ -54,8 +55,12 @@ jobs:
           enable-cache: true
       - run: uv python install 3.12
       - run: uv sync --python 3.12 --frozen --no-dev
+      - name: Wake database before migrations
+        run: uv run --frozen --no-dev python -m fin_ingestion.operations.database_ready
       - name: Verify and apply the immutable engine migration contract
         run: uv run --frozen --no-dev python scripts/apply_engine_migrations.py --db-repo tests/schema_contract --apply
+      - name: Apply durable runtime ledger
+        run: uv run --frozen --no-dev python -m scripts.apply_runtime_migrations --apply
       - name: Deploy and verify official sources, authenticated brapi and Gold
         env:
           REFERENCE_DATE: ${{ inputs.reference_date }}
