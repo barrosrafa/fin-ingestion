@@ -19,7 +19,7 @@ from fin_ingestion.collectors.commercial.brapi import BrapiCollector
 from fin_ingestion.config import settings
 from fin_ingestion.core.distributed_controls import DistributedSourceControls
 from fin_ingestion.dw.dw_writer import DWWriter
-from fin_ingestion.pipelines.market_gateway import MarketPipeline
+from fin_ingestion.pipelines.market_gateway import MarketGateway, MarketPipeline
 from fin_ingestion.pipelines.provider_pipeline import ProviderPipeline
 from fin_ingestion.pipelines.result import require_complete_result
 from fin_ingestion.scheduler.market_calendar import TZ_SP, MarketCalendar
@@ -129,23 +129,11 @@ def build_gold(profile=None):
 
 async def run_dataset(dataset, day, pool, cnpjs):
     if dataset == "market_eod":
-        from fin_ingestion.collectors.official.b3 import B3Collector
-        b3 = B3Collector()
+        gateway = MarketGateway(pool=pool)
         try:
-            official = await b3.get_daily_quotes(day)
+            result = await gateway.official_session(day)
         finally:
-            await b3.close()
-        universe = sorted({row["ticker"] for row in official})
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT ticker FROM core.ativo WHERE ticker=ANY($1::text[])", universe
-            )
-        tickers = sorted(row["ticker"] for row in rows)
-        if not tickers:
-            raise ValueError("No registered instruments in the official session universe")
-        result = await MarketPipeline(pool=pool).run(reference_date=day, tickers=tickers)
-        result["universe"] = {"official": len(universe), "registered": len(tickers),
-                              "unresolved": sorted(set(universe) - set(tickers))}
+            await gateway.close()
         await asyncio.to_thread(
             subprocess.run, [sys.executable, "-m", "fin_ingestion.cli", "compute-analytics"],
             check=True, timeout=600,

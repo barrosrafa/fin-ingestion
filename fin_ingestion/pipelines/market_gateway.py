@@ -21,6 +21,58 @@ class MarketGateway:
             self.writer._pool = pool
         self.external_pool = pool is not None
 
+    @staticmethod
+    def normalize_official(row, reference_date):
+        factor = row["fator_cotacao"]
+        if factor <= 0 or row["data_pregao"] != reference_date.isoformat():
+            raise ValueError("Invalid official session or quotation factor")
+        return {
+            "ticker": row["ticker"], "reference_date": reference_date,
+            "open": row["preco_abertura"] / factor,
+            "high": row["preco_maximo"] / factor,
+            "low": row["preco_minimo"] / factor,
+            "close": row["preco_fechamento"] / factor,
+            "volume": row["quantidade_titulos"],
+            "financial_turnover": row.get("volume_financeiro"),
+            "trade_count": row.get("numero_negocios"),
+            "source": "b3", "currency": "BRL",
+        }
+
+    async def official_session(self, reference_date):
+        """Preserve the whole official session before resolving serving IDs.
+
+        Nominal bars do not require an inferred asset class or a synthetic
+        issuer. Registry gaps are explicit; they never discard official prices.
+        """
+        official = await self.b3.get_daily_quotes(reference_date)
+        records = [self.normalize_official(row, reference_date) for row in official]
+        tickers = {r["ticker"] for r in records}
+        if not records or len(tickers) != len(records):
+            raise ValueError("Empty or duplicate official session identities")
+        loaded = await self.silver.write_records("bars", records)
+        if loaded != len(records):
+            raise ValueError("Official nominal coverage is incomplete")
+        ticker_map = await self.writer.get_ticker_id_map()
+        serving = [r for r in records if r["ticker"] in ticker_map]
+        written = await self.writer.write_daily_quotes([{
+            "ticker": r["ticker"], "data_pregao": r["reference_date"],
+            "preco_abertura": r["open"], "preco_maximo": r["high"],
+            "preco_minimo": r["low"], "preco_fechamento": r["close"],
+            "volume_total": r["financial_turnover"], "quantidade_negocios": r["trade_count"],
+        } for r in serving])
+        if written != len(serving):
+            raise ValueError("Registered serving coverage is incomplete")
+        unresolved = sorted(tickers - set(ticker_map))
+        return {
+            "pipeline": "market_eod", "status": "SUCCEEDED",
+            "total_records": len(records), "records_loaded": loaded,
+            "serving_records_loaded": written, "watermark_date": reference_date.isoformat(),
+            "sources_executed": ["b3"], "universe": {
+                "official": len(records), "nominal_loaded": loaded,
+                "registered": len(serving), "unresolved": unresolved,
+            },
+        }
+
     async def intraday(self, tickers, now=None):
         if not settings.intraday_enabled:
             raise ValueError(
@@ -71,24 +123,7 @@ class MarketGateway:
             official = await self.b3.get_daily_quotes(reference_date)
             for row in official:
                 if row["ticker"] in missing:
-                    factor = row["fator_cotacao"]
-                    if factor <= 0:
-                        raise ValueError("Invalid B3 quotation factor")
-                    records.append(
-                        {
-                            "ticker": row["ticker"],
-                            "reference_date": reference_date,
-                            "open": row["preco_abertura"] / factor,
-                            "high": row["preco_maximo"] / factor,
-                            "low": row["preco_minimo"] / factor,
-                            "close": row["preco_fechamento"] / factor,
-                            "volume": row["quantidade_titulos"],
-                            "financial_turnover": row.get("volume_financeiro"),
-                            "trade_count": row.get("numero_negocios"),
-                            "source": "b3",
-                            "currency": "BRL",
-                        }
-                    )
+                    records.append(self.normalize_official(row, reference_date))
             used_fallback = True
         if {r["ticker"] for r in records} != set(tickers):
             raise ValueError("Same-session EOD coverage is incomplete; stale fallback refused")
