@@ -33,6 +33,8 @@ ENV PYTHONUNBUFFERED=1
 # Copia código da aplicação e dbt
 COPY fin_ingestion/ /app/fin_ingestion/
 COPY dbt/ /app/dbt/
+COPY migrations/ /app/migrations/
+COPY scripts/ /app/scripts/
 COPY pyproject.toml /app/
 
 # Usuário não-root

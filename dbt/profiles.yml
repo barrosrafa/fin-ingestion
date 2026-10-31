@@ -11,6 +11,8 @@ fin:
       schema: public
       threads: 4
       keepalives_idle: 0
+      connect_timeout: 20
+      retries: 5
       sslmode: "{{ env_var('DBT_SSLMODE', 'require') }}"
     prod:
       type: postgres
@@ -22,4 +24,6 @@ fin:
       schema: public
       threads: 8
       keepalives_idle: 0
+      connect_timeout: 20
+      retries: 5
       sslmode: require

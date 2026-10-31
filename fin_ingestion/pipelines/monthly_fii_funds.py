@@ -30,6 +30,11 @@ class MonthlyFIIFundsPipeline:
         self.mais_retorno = MaisRetornoCollector()
         self.etfs_brasil = ETFsBrasilCollector()
 
+    async def close(self) -> None:
+        for collector in (self.cvm, self.clube_fii, self.funds_explorer, self.fiis_com_br,
+                          self.brick360, self.mais_retorno, self.etfs_brasil):
+            await collector.close()
+
     async def run(
         self,
         fii_tickers: list[str] | None = None,

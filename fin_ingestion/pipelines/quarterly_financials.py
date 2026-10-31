@@ -24,6 +24,10 @@ class QuarterlyFinancialsPipeline:
         self.fundamentei = FundamenteiCollector()
         self.fundamentus = FundamentusCollector()
 
+    async def close(self) -> None:
+        for collector in (self.cvm, self.investidor10, self.fundamentei, self.fundamentus):
+            await collector.close()
+
     async def run(self, tickers: list[str] | None = None, include_secondary: bool = False) -> dict[str, Any]:
         target_tickers = tickers or ["PETR4", "VALE3", "WEGE3"]
         logger.info("Iniciando pipeline trimestral de demonstrativos", tickers=target_tickers)

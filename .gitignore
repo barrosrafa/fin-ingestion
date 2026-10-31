@@ -5,6 +5,7 @@ __pycache__/
 
 # Virtual environments
 .venv/
+.venv-*/
 venv/
 ENV/
 env/
@@ -43,6 +44,7 @@ data/staging/
 data/downloads/
 data/bronze/
 data/homologation/
+data/runtime/
 
 # Local dbt installation identity
 dbt/.user.yml

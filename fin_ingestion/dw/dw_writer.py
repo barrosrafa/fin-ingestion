@@ -11,6 +11,7 @@ import asyncpg
 import structlog
 
 from fin_ingestion.config import settings
+from fin_ingestion.core.database import create_pool_with_retry
 from fin_ingestion.quality.market_schema import validate_complete_candles
 from fin_ingestion.quality.temporal import timestamp_utc
 from fin_ingestion.quality.validator import DataQualityValidator
@@ -31,7 +32,7 @@ class DWWriter:
         if self._pool is None:
             async with self._pool_lock:
                 if self._pool is None:
-                    self._pool = await asyncpg.create_pool(dsn=self.db_url, min_size=1, max_size=5)
+                    self._pool = await create_pool_with_retry(self.db_url)
         return self._pool
 
     async def close(self) -> None:
