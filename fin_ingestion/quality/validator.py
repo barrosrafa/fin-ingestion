@@ -81,3 +81,31 @@ class DataQualityValidator:
                 return False, "Variação inválida", False
 
         return True, None, False
+
+
+DIVIDEND_YIELD_FIELDS = frozenset({
+    "dividend_yield", "dividend_yield_pct", "dividend_yield_12m",
+    "dividend_yield_12m_pct", "dy_pct", "dividendYield",
+})
+
+
+def validate_snapshot_indicators(data: Any) -> None:
+    """Fail publication before any writer runs; preserve the last known good snapshot.
+
+    Yields use percentage points. Out-of-policy values need provenance review,
+    never an automatic division by 100. Missing values are allowed.
+    """
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key in DIVIDEND_YIELD_FIELDS and value is not None:
+                try:
+                    number = Decimal(str(value))
+                    valid = number.is_finite() and 0 <= number <= 100
+                except Exception:
+                    valid = False
+                if not valid:
+                    raise ValueError(f"Snapshot blocked: invalid {key}")
+            validate_snapshot_indicators(value)
+    elif isinstance(data, (list, tuple)):
+        for item in data:
+            validate_snapshot_indicators(item)

@@ -17,6 +17,7 @@ import asyncpg
 import structlog
 
 from fin_ingestion.dw.dw_writer import DWWriter
+from fin_ingestion.quality.validator import validate_snapshot_indicators
 
 logger = structlog.get_logger(__name__)
 
@@ -132,7 +133,8 @@ class SnapshotExporter:
     @staticmethod
     def wrap_envelope(data: Any, schema_name: str) -> dict[str, Any]:
         """Empacota os dados em envelope padronizado com hash SHA-256."""
-        serialized = json.dumps(data, cls=SnapshotJSONEncoder, sort_keys=True)
+        validate_snapshot_indicators(data)
+        serialized = json.dumps(data, cls=SnapshotJSONEncoder, sort_keys=True, allow_nan=False)
         content_hash = f"sha256:{hashlib.sha256(serialized.encode('utf-8')).hexdigest()}"
         return {
             "meta": {
