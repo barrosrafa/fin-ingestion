@@ -103,3 +103,37 @@ async def test_real_postgres_installments_replay_quarantine_and_source_precedenc
     finally:
         await conn.close()
         server.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_seasonality_rebuild_removes_old_income_and_preserves_payment_months(tmp_path):
+    from fin_ingestion.pipelines.dividend_seasonality_pipeline import DividendSeasonalityAggregator
+
+    pgserver = pytest.importorskip("pgserver")
+    server = pgserver.get_server(tmp_path / "pg", cleanup_mode="stop")
+    conn = await asyncpg.connect(server.get_uri())
+    try:
+        await conn.execute("""
+            CREATE SCHEMA market; CREATE SCHEMA analytics;
+            CREATE TABLE market.provento(id_ativo int,data_com date,data_pagamento date,valor_por_acao numeric);
+            CREATE TABLE market.cotacao_diaria(id_ativo int,data_pregao date,preco_fechamento numeric);
+            CREATE TABLE analytics.mapa_sazonalidade_dividendo(id_ativo int,mes_calendario smallint,
+                tipo_evento text,ocorrencias_historicas int DEFAULT 0,anos_analisados int DEFAULT 1,
+                valor_medio_provento numeric,yield_medio_mensal numeric,ultimo_ano_pago int,
+                data_atualizacao timestamptz DEFAULT now(),PRIMARY KEY(id_ativo,mes_calendario,tipo_evento));
+            INSERT INTO analytics.mapa_sazonalidade_dividendo(id_ativo,mes_calendario,tipo_evento)
+                VALUES(999,1,'PAGAMENTO');
+            INSERT INTO market.provento VALUES
+                (1,'2026-08-21','2026-11-23',0.67407131),
+                (1,'2026-08-21','2026-12-21',0.67407131);
+        """)
+        aggregator = DividendSeasonalityAggregator()
+        for _ in range(2):
+            result = await aggregator.aggregate_seasonality(conn=conn)
+            assert result["total_records"] == 3
+        assert await conn.fetchval("SELECT count(*) FROM analytics.mapa_sazonalidade_dividendo WHERE id_ativo=999") == 0
+        months = await conn.fetch("SELECT mes_calendario FROM analytics.mapa_sazonalidade_dividendo WHERE tipo_evento='PAGAMENTO' ORDER BY 1")
+        assert [r["mes_calendario"] for r in months] == [11, 12]
+    finally:
+        await conn.close()
+        server.cleanup()

@@ -57,3 +57,7 @@ A migração de precisão destaca temporariamente as views dependentes e as
 recria em ordem, preservando definição, proprietário, opções, índices e grants.
 O runner operacional atualiza a visão materializada mensal dentro da mesma
 transação; a recuperação dos pagamentos volta a atualizá-la após a conciliação.
+
+A recuperação também reconstrói a sazonalidade de data com e pagamento na mesma
+transação, removendo meses/ativos obsoletos do cache derivado. Assim, o mapa não
+continua exibindo os agregados antigos depois de corrigir a agenda.
