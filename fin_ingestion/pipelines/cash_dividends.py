@@ -77,29 +77,30 @@ def parse_statusinvest(html):
 
 
 async def archive_synthetic(conn):
-    """Reversible quarantine of the exact signature of the two broken importers.
+    """Reversible quarantine of payments without any source evidence.
 
     Referenced rows abort the transaction rather than erase user history.
     """
     # Never cascade away calendar entries. Preserve user references for review.
     referenced = await conn.fetchval("""SELECT count(*) FROM market.calendario_proventos c
         JOIN market.provento p USING(id_provento)
-        WHERE p.fonte_provento IS NULL AND p.data_anuncio IS NULL AND p.observacao IS NULL
-          AND p.data_com=p.data_ex-1 AND p.data_pagamento=p.data_ex
-          AND p.mes_referencia=to_char(p.data_com,'YYYY-MM')""")
+        WHERE p.fonte_provento IS NULL""")
     if referenced:
         raise ValueError("Synthetic events have calendar references; manual reconciliation required")
     return await conn.fetchval("""
         WITH moved AS (
             DELETE FROM market.provento p
-            WHERE fonte_provento IS NULL AND data_anuncio IS NULL AND observacao IS NULL
-              AND data_com=data_ex-1 AND data_pagamento=data_ex
-              AND mes_referencia=to_char(data_com,'YYYY-MM')
-              AND tipo_provento::text IN ('DIVIDENDO','RENDIMENTO')
+            WHERE fonte_provento IS NULL
             RETURNING p.*
         ), archived AS (
             INSERT INTO ingestion.provento_quarentena(id_provento,registro_original,motivo)
-            SELECT id_provento,to_jsonb(moved),'YAHOO_AGGREGATE_WITH_INVENTED_PAYMENT'
+            SELECT id_provento,to_jsonb(moved),CASE
+                WHEN data_anuncio IS NULL AND observacao IS NULL
+                  AND data_com=data_ex-1 AND data_pagamento=data_ex
+                  AND mes_referencia=to_char(data_com,'YYYY-MM')
+                  AND tipo_provento::text IN ('DIVIDENDO','RENDIMENTO')
+                THEN 'YAHOO_AGGREGATE_WITH_INVENTED_PAYMENT'
+                ELSE 'LEGACY_WITHOUT_SOURCE_EVIDENCE' END
             FROM moved RETURNING id_provento
         ) SELECT count(*) FROM archived
     """)

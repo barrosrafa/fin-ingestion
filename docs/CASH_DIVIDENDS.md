@@ -27,10 +27,11 @@ python -m fin_ingestion.pipelines.cash_dividends --apply --quarantine --refresh-
 ```
 
 Sem `--apply`, a operação só consulta fontes e produz o relatório. `--quarantine`
-é reservado à recuperação do universo completo. Registros sem proveniência que
+é reservado à recuperação do universo completo. Registros sem proveniência são movidos para quarentena. Os que
 correspondam à assinatura dos dois importadores Yahoo antigos (pagamento igual
 à data ex, data com igual à data ex menos um dia corrido, sem anúncio/observação,
-competência ISO) são movidos, na mesma transação, para
+competência ISO) recebem um motivo específico; os demais ficam pendentes de
+verificação como `LEGACY_WITHOUT_SOURCE_EVIDENCE`. Tudo ocorre, na mesma transação, em
 `ingestion.provento_quarentena`, preservando integralmente cada registro original.
 Referências de usuários impedem a remoção; o processo falha e reverte a transação.
 Não se convertem esses agregados em pagamentos históricos inventados quando a
