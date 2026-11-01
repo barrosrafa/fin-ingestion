@@ -6,10 +6,18 @@ import pytest
 
 from fin_ingestion.pipelines.cash_dividends import (
     archive_synthetic,
+    issuer_code,
     parse_b3,
     parse_statusinvest,
     persist,
 )
+
+
+@pytest.mark.parametrize("ticker,issuer", [("PETR4","PETR"),("B3SA3","B3SA"),
+    ("G2DI33","G2DI"),("2WAV3","2WAV"),("MRSA3B","MRSA"),("ANCR11B","ANCR"),
+    ("PETR4.SA",None),("../PETR4",None)])
+def test_official_issuer_codes_accept_alphanumeric_roots(ticker, issuer):
+    assert issuer_code(ticker) == issuer
 
 
 def event(**changes):

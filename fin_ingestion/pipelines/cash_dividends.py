@@ -23,6 +23,10 @@ TYPES = {"DIVIDENDO": "DIVIDENDO", "DIVIDENDOS": "DIVIDENDO", "JCP": "JCP",
 CAPITAL_ACTIONS = {"REST CAP DIN", "AMORTIZACAO RF"}
 
 
+def issuer_code(ticker):
+    return ticker[:4] if re.fullmatch(r"[A-Z0-9]{4}\d{1,2}B?", ticker) else None
+
+
 def br_date(value):
     return datetime.strptime(value, "%d/%m/%Y").date()
 
@@ -151,12 +155,15 @@ async def run(pool, *, apply=False, tickers=None, html=None, html_ticker=None, q
         """, tickers)
     issuers = {}
     for asset in assets:
-        if re.fullmatch(r"[A-Z]{4}\d{1,2}B?", asset["ticker"]):
-            issuers.setdefault(asset["ticker"][:4], []).append(asset)
+        issuer = issuer_code(asset["ticker"])
+        if issuer:
+            issuers.setdefault(issuer, []).append(asset)
     report = {"status": "SUCCEEDED", "assets": len(assets), "written": 0,
               "quarantined": 0, "coverage": [], "errors": []}
     report["coverage"].extend({"ticker": a["ticker"], "status": "MISSING_ISIN"}
                               for a in assets if not a["isin"])
+    report["coverage"].extend({"ticker": a["ticker"], "status": "UNSUPPORTED_SYMBOL"}
+                              for a in assets if a["isin"] and not issuer_code(a["ticker"]))
     issuers = {issuer: [a for a in members if a["isin"]]
                for issuer, members in issuers.items() if any(a["isin"] for a in members)}
     # Fetch independently with a small bounded concurrency. The single database
