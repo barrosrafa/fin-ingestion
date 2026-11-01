@@ -27,6 +27,13 @@ def test_equal_installments_and_share_classes_are_preserved():
     assert rows[0]["tipo_provento"] == "JCP"
 
 
+def test_capital_returns_do_not_suppress_dividend_income():
+    rows = parse_b3([{"cashDividends": [event(label="REST CAP DIN"),
+                     event(label="AMORTIZACAO RF"), event()]}], "BRPETRACNPR6")
+    assert len(rows) == 1
+    assert rows[0]["tipo_provento"] == "JCP"
+
+
 def test_invalid_or_incomplete_events_are_not_invented():
     with pytest.raises(ValueError):
         parse_b3([{"cashDividends": [event(label="UNKNOWN")]}], "BRPETRACNPR6")
@@ -49,7 +56,7 @@ async def test_real_postgres_installments_replay_quarantine_and_source_precedenc
     conn = await asyncpg.connect(server.get_uri())
     try:
         await conn.execute("""
-            CREATE SCHEMA market; CREATE SCHEMA ingestion;
+            CREATE SCHEMA market; CREATE SCHEMA ingestion; CREATE SCHEMA analytics;
             CREATE TYPE market.tipo_provento_enum AS ENUM('DIVIDENDO','JCP','RENDIMENTO');
             CREATE TABLE market.provento(id_provento bigserial PRIMARY KEY,id_ativo int,
                 tipo_provento market.tipo_provento_enum,data_com date,data_ex date,
@@ -58,6 +65,10 @@ async def test_real_postgres_installments_replay_quarantine_and_source_precedenc
                 UNIQUE(id_ativo,tipo_provento,data_com,data_pagamento));
             CREATE UNIQUE INDEX uq_provento_ativo_tipo_ex_valor
                 ON market.provento(id_ativo,tipo_provento,data_ex,valor_por_acao);
+            CREATE VIEW analytics.payment_values WITH(security_barrier=true) AS SELECT valor_por_acao FROM market.provento;
+            CREATE MATERIALIZED VIEW analytics.payment_sum AS SELECT sum(valor_por_acao) AS total FROM analytics.payment_values WITH NO DATA;
+            CREATE UNIQUE INDEX payment_sum_total ON analytics.payment_sum(total);
+            COMMENT ON VIEW analytics.payment_values IS 'retained comment';
             CREATE TABLE market.calendario_proventos(id_provento bigint REFERENCES market.provento);
             INSERT INTO market.provento(id_ativo,tipo_provento,data_com,data_ex,data_pagamento,
                 valor_por_acao,mes_referencia)
@@ -65,6 +76,9 @@ async def test_real_postgres_installments_replay_quarantine_and_source_precedenc
         """)
         for path in sorted((Path(__file__).parents[1] / "migrations/22_cash_dividend_integrity").glob("*.sql")):
             await conn.execute(path.read_text())
+        assert await conn.fetchval("SELECT obj_description('analytics.payment_values'::regclass)") == 'retained comment'
+        assert await conn.fetchval("SELECT reloptions FROM pg_class WHERE oid='analytics.payment_values'::regclass") == ['security_barrier=true']
+        await conn.execute("REFRESH MATERIALIZED VIEW analytics.payment_sum")
         async with conn.transaction():
             assert await archive_synthetic(conn) == 1
             assert await archive_synthetic(conn) == 0

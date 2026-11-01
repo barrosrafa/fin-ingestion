@@ -46,3 +46,13 @@ permanecer identificados; não há promessa de igualdade entre fontes divergente
 Para reverter uma quarentena, selecionar os IDs desejados e restaurar as colunas
 do JSON original em uma transação revisada, após conciliar pagamentos novos e
 referências. Não restaurar automaticamente os agregados sobre a agenda corrigida.
+
+As restituições de capital (`REST CAP DIN`) e amortizações (`AMORTIZACAO RF`)
+permanecem no snapshot original e não entram na soma de renda de dividendos.
+O fechamento oficial também completa os ISINs ausentes com o COTAHIST, sem
+sobrescrever identificadores existentes.
+
+A migração de precisão destaca temporariamente as views dependentes e as
+recria em ordem, preservando definição, proprietário, opções, índices e grants.
+O runner operacional atualiza a visão materializada mensal dentro da mesma
+transação; a recuperação dos pagamentos volta a atualizá-la após a conciliação.

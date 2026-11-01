@@ -30,6 +30,10 @@ async def migrate(pool, apply=False):
                 state = "already_applied" if stored else "pending"
                 if apply and not stored:
                     await conn.execute(path.read_text())
+                    if version == "22_cash_dividend_integrity/01_cash_dividends.sql":
+                        # Operational refresh belongs to this runner, not schema-only DDL.
+                        if await conn.fetchval("SELECT to_regclass('analytics.cagg_provento_mensal') IS NOT NULL"):
+                            await conn.execute("REFRESH MATERIALIZED VIEW analytics.cagg_provento_mensal")
                     await conn.execute(
                         "INSERT INTO system.schema_migrations(version,checksum) VALUES($1,$2)",
                         version, digest,

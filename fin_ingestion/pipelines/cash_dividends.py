@@ -20,6 +20,7 @@ B3_URL = "https://sistemaswebb3-listados.b3.com.br/listedCompaniesProxy/CompanyC
 TYPES = {"DIVIDENDO": "DIVIDENDO", "DIVIDENDOS": "DIVIDENDO", "JCP": "JCP",
          "JRS CAP PROPRIO": "JCP", "RENDIMENTO": "RENDIMENTO",
          "REND. TRIBUTADO": "RENDIMENTO_TRIBUTADO"}
+CAPITAL_ACTIONS = {"REST CAP DIN", "AMORTIZACAO RF"}
 
 
 def br_date(value):
@@ -49,6 +50,8 @@ def parse_b3(payload, isin):
         for row in company.get("cashDividends", []):
             if row.get("isinCode") != isin:
                 continue
+            if row.get("label", "").strip().upper() in CAPITAL_ACTIONS:
+                continue  # Capital returned is not dividend income; retain its raw snapshot.
             if not row.get("paymentDate") or row["paymentDate"] in {"01/01/0001", "31/12/9999"}:
                 continue  # Unknown payments remain in the source snapshot.
             records.append(cash_event(row["label"], row["lastDatePrior"], row["paymentDate"],
@@ -151,6 +154,10 @@ async def run(pool, *, apply=False, tickers=None, html=None, html_ticker=None, q
             issuers.setdefault(asset["ticker"][:4], []).append(asset)
     report = {"status": "SUCCEEDED", "assets": len(assets), "written": 0,
               "quarantined": 0, "coverage": [], "errors": []}
+    report["coverage"].extend({"ticker": a["ticker"], "status": "MISSING_ISIN"}
+                              for a in assets if not a["isin"])
+    issuers = {issuer: [a for a in members if a["isin"]]
+               for issuer, members in issuers.items() if any(a["isin"] for a in members)}
     # Fetch independently with a small bounded concurrency. The single database
     # transaction below prevents exposing a partially repaired calendar.
     semaphore = asyncio.Semaphore(3)
@@ -187,13 +194,10 @@ async def run(pool, *, apply=False, tickers=None, html=None, html_ticker=None, q
             report["coverage"].extend({"ticker": a["ticker"], "status": "SOURCE_UNAVAILABLE"} for a in members)
             continue
         for asset in members:
-            if not asset["isin"]:
-                report["coverage"].append({"ticker": asset["ticker"], "status": "MISSING_ISIN"})
-                continue
             try:
                 rows = parse_b3(data, asset["isin"])
             except (ValueError, KeyError) as exc:
-                report["errors"].append({"ticker": asset["ticker"], "error_type": type(exc).__name__})
+                report["errors"].append({"ticker": asset["ticker"], "error_type": type(exc).__name__, "detail": str(exc)})
                 continue
             prepared.append((asset["id_ativo"], rows))
             report["coverage"].append({"ticker": asset["ticker"], "status": "VERIFIED" if rows else "NO_DATED_PAYMENTS",
@@ -226,6 +230,8 @@ async def run(pool, *, apply=False, tickers=None, html=None, html_ticker=None, q
                 report["written"] += await persist(conn, asset_id, rows, "B3")
             if html_rows:
                 report["written"] += await persist(conn, html_asset["id_ativo"], html_rows, "STATUSINVEST_USER_HTML")
+            if await conn.fetchval("SELECT to_regclass('analytics.cagg_provento_mensal') IS NOT NULL"):
+                await conn.execute("REFRESH MATERIALIZED VIEW analytics.cagg_provento_mensal")
     return report
 
 
