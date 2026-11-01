@@ -72,6 +72,7 @@ async def test_real_postgres_installments_replay_quarantine_and_source_precedenc
         rows = parse_b3([{"cashDividends": [event(), event(paymentDate="21/09/2026")]}], "BRPETRACNPR6")
         for _ in range(2):
             await persist(conn, 1, rows, "B3")
+        await conn.execute("UPDATE market.provento SET data_ex='2026-06-02'")
         assert await conn.fetchval("SELECT count(*) FROM market.provento") == 2
         assert await conn.fetchval("SELECT sum(valor_por_acao) FROM market.provento") == Decimal("0.70097272000")
         income = parse_b3([{"cashDividends": [event(label="RENDIMENTO", rate="0,02038398")]}], "BRPETRACNPR6")

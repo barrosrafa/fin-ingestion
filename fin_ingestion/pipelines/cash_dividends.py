@@ -154,21 +154,29 @@ async def run(pool, *, apply=False, tickers=None, html=None, html_ticker=None, q
     # Fetch independently with a small bounded concurrency. The single database
     # transaction below prevents exposing a partially repaired calendar.
     semaphore = asyncio.Semaphore(3)
+    completed = 0
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
         async def fetch(issuer):
+            nonlocal completed
             async with semaphore:
-                params = {"issuingCompany": issuer, "language": "pt-br"}
-                token = base64.b64encode(json.dumps(params).encode()).decode()
-                response = await client.get(B3_URL + "GetListedSupplementCompany/" + token)
-                response.raise_for_status()
-                if not response.text.strip():
-                    return None  # No listed supplement; report unavailable coverage.
-                data = response.json()
-                if data == []:
-                    return None
-                if not isinstance(data, list):
-                    raise ValueError("Invalid B3 supplement")
-                return data
+                try:
+                    params = {"issuingCompany": issuer, "language": "pt-br"}
+                    token = base64.b64encode(json.dumps(params).encode()).decode()
+                    response = await client.get(B3_URL + "GetListedSupplementCompany/" + token)
+                    response.raise_for_status()
+                    if not response.text.strip():
+                        return None  # No listed supplement; report unavailable coverage.
+                    data = response.json()
+                    if data == []:
+                        return None
+                    if not isinstance(data, list):
+                        raise ValueError("Invalid B3 supplement")
+                    return data
+                finally:
+                    completed += 1
+                    if completed % 50 == 0:
+                        print(json.dumps({"phase": "collecting_b3", "issuers": completed,
+                                          "total_issuers": len(issuers)}), flush=True)
         results = await asyncio.gather(*(fetch(i) for i in issuers), return_exceptions=True)
     prepared = []
     for (issuer, members), data in zip(issuers.items(), results):
@@ -201,6 +209,8 @@ async def run(pool, *, apply=False, tickers=None, html=None, html_ticker=None, q
         r["status"] in {"VERIFIED", "NO_DATED_PAYMENTS"} for r in report["coverage"]
     )
     if apply:
+        if quarantine and report["errors"]:
+            return report  # Do not start the initial repair after a failed collection.
         async with pool.acquire() as conn, conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock(742198275)")
             if quarantine:
