@@ -137,3 +137,31 @@ async def test_seasonality_rebuild_removes_old_income_and_preserves_payment_mont
     finally:
         await conn.close()
         server.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_fii_gold_yield_uses_paid_twelve_month_window(tmp_path):
+    pgserver = pytest.importorskip("pgserver")
+    server = pgserver.get_server(tmp_path / "pg", cleanup_mode="stop")
+    conn = await asyncpg.connect(server.get_uri())
+    try:
+        await conn.execute("""
+            CREATE TABLE fct_cotacao_diaria(ticker text,preco_fechamento numeric,data_pregao date);
+            CREATE TABLE fct_provento(ticker text,valor_provento numeric,data_pagamento date);
+            CREATE TABLE fct_fii_snapshot_mensal(ticker text,razao_social text,gestora text,
+                patrimonio_liquido numeric,vacancia_fisica_pct numeric,vacancia_financeira_pct numeric,
+                total_imoveis int,brick_score_global numeric,walt_anos numeric);
+            INSERT INTO fct_fii_snapshot_mensal(ticker) VALUES('TEST11');
+            INSERT INTO fct_cotacao_diaria VALUES('TEST11',100,current_date);
+            INSERT INTO fct_provento VALUES('TEST11',1.17,current_date-10),
+                ('TEST11',99,current_date+1),('TEST11',99,current_date-interval '13 months');
+        """)
+        model = (Path(__file__).parents[1] / "dbt/models/marts/mart_screener_fiis.sql").read_text()
+        for name in ("fct_cotacao_diaria", "fct_provento", "fct_fii_snapshot_mensal"):
+            model = model.replace("{{ ref('" + name + "') }}", name)
+        row = await conn.fetchrow(model)
+        assert row["proventos_acumulados_12m"] == Decimal("1.17")
+        assert row["dividend_yield_12m_pct"] == Decimal("1.17")
+    finally:
+        await conn.close()
+        server.cleanup()

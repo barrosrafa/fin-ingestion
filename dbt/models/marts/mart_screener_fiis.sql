@@ -20,7 +20,8 @@ proventos_12m as (
         sum(valor_provento) as proventos_acumulados_12m,
         count(*) as quantidade_pagamentos
     from {{ ref('fct_provento') }}
-    where data_pagamento >= current_date - interval '365 days'
+    where data_pagamento >= current_date - interval '12 months'
+      and data_pagamento < current_date
     group by ticker
 )
 
