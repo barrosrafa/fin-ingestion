@@ -238,6 +238,19 @@ async def run(pool, *, apply=False, tickers=None, html=None, html_ticker=None, q
 async def main_async(args):
     pool = await create_pool_with_retry(settings.database_url_async.replace("postgresql+asyncpg://", "postgresql://"))
     try:
+        if args.refresh_identifiers:
+            if not args.apply:
+                raise ValueError("Identifier refresh requires --apply")
+            from fin_ingestion.collectors.official.b3 import B3Collector
+            from fin_ingestion.dw.dw_writer import DWWriter
+
+            collector, writer = B3Collector(), DWWriter()
+            writer._pool = pool
+            try:
+                await collector.get_recent_traded_tickers()
+                await writer.write_instrument_identifiers(collector.recent_daily_quotes)
+            finally:
+                await collector.close()
         report = await run(pool, apply=args.apply, tickers=args.tickers.split(",") if args.tickers else None,
                            html=args.html, html_ticker=args.html_ticker, quarantine=args.quarantine)
         output = Path(args.output)
@@ -253,6 +266,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--quarantine", action="store_true")
+    parser.add_argument("--refresh-identifiers", action="store_true")
     parser.add_argument("--tickers")
     parser.add_argument("--html")
     parser.add_argument("--html-ticker")

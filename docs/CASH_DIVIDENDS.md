@@ -22,7 +22,7 @@ significa que o ativo nunca pagou proventos; a janela da fonte é limitada.
 Depois de passar na CI, aplicar as migrations e executar:
 
 ```sh
-python -m fin_ingestion.pipelines.cash_dividends --apply --quarantine \
+python -m fin_ingestion.pipelines.cash_dividends --apply --quarantine --refresh-identifiers \
   --html data/reference/statusinvest-petr4-2026-10-31.html --html-ticker PETR4
 ```
 
