@@ -16,6 +16,7 @@ async def test_dividend_seasonality_aggregator():
     mock_conn = AsyncMock()
     mock_conn.execute.return_value = "INSERT 0 12"
     mock_conn.fetchval.return_value = 41
+    mock_conn.transaction = MagicMock()
 
     mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
 
@@ -24,7 +25,7 @@ async def test_dividend_seasonality_aggregator():
 
     assert result["status"] == "success"
     assert result["total_records"] == 41
-    mock_conn.execute.assert_called_once()
+    assert mock_conn.execute.await_count == 2
 
 
 @pytest.mark.asyncio

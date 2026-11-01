@@ -231,6 +231,13 @@ async def run(pool, *, apply=False, tickers=None, html=None, html_ticker=None, q
                 report["written"] += await persist(conn, asset_id, rows, "B3")
             if html_rows:
                 report["written"] += await persist(conn, html_asset["id_ativo"], html_rows, "STATUSINVEST_USER_HTML")
+            if await conn.fetchval("SELECT to_regclass('analytics.mapa_sazonalidade_dividendo') IS NOT NULL"):
+                from fin_ingestion.pipelines.dividend_seasonality_pipeline import (
+                    DividendSeasonalityAggregator,
+                )
+
+                cache = await DividendSeasonalityAggregator(pool).aggregate_seasonality(conn=conn)
+                report["seasonality_rows"] = cache["total_records"]
             if await conn.fetchval("SELECT to_regclass('analytics.cagg_provento_mensal') IS NOT NULL"):
                 await conn.execute("REFRESH MATERIALIZED VIEW analytics.cagg_provento_mensal")
     return report

@@ -16,13 +16,13 @@ class DividendSeasonalityAggregator:
     def __init__(self, db_pool: asyncpg.Pool | None = None):
         self.db_pool = db_pool
 
-    async def aggregate_seasonality(self) -> dict[str, Any]:
+    async def aggregate_seasonality(self, conn=None) -> dict[str, Any]:
         """
         Scans market.provento and populates analytics.mapa_sazonalidade_dividendo
         for all 12 calendar months with occurrence count, analyzed years, average payout
         and computed probability.
         """
-        if not self.db_pool:
+        if not self.db_pool and conn is None:
             raise RuntimeError("Database connection pool not initialized")
 
         query = """
@@ -32,22 +32,24 @@ class DividendSeasonalityAggregator:
         )
         SELECT
             p.id_ativo,
-            EXTRACT(MONTH FROM p.data_com)::smallint AS mes_calendario,
-            'DATA_COM' AS tipo_evento,
-            COUNT(DISTINCT EXTRACT(YEAR FROM p.data_com)) AS ocorrencias_historicas,
-            (GREATEST(EXTRACT(YEAR FROM MAX(p.data_com)) - EXTRACT(YEAR FROM MIN(p.data_com)) + 1, 1))::int AS anos_analisados,
+            EXTRACT(MONTH FROM event.event_date)::smallint AS mes_calendario,
+            event.event_kind AS tipo_evento,
+            COUNT(DISTINCT EXTRACT(YEAR FROM event.event_date)) AS ocorrencias_historicas,
+            (GREATEST(EXTRACT(YEAR FROM MAX(event.event_date)) - EXTRACT(YEAR FROM MIN(event.event_date)) + 1, 1))::int AS anos_analisados,
             COALESCE(AVG(p.valor_por_acao), 0.0) AS valor_medio_provento,
             COALESCE(AVG(p.valor_por_acao / NULLIF(cd.preco_fechamento, 0)), 0.0) AS yield_medio_mensal,
-            MAX(EXTRACT(YEAR FROM p.data_com))::int AS ultimo_ano_pago
+            MAX(EXTRACT(YEAR FROM event.event_date))::int AS ultimo_ano_pago
         FROM market.provento p
+        CROSS JOIN LATERAL (VALUES ('DATA_COM',p.data_com), ('PAGAMENTO',p.data_pagamento))
+            AS event(event_kind,event_date)
         LEFT JOIN LATERAL (
             SELECT preco_fechamento
             FROM market.cotacao_diaria
-            WHERE id_ativo = p.id_ativo AND data_pregao <= p.data_com
+            WHERE id_ativo = p.id_ativo AND data_pregao <= event.event_date
             ORDER BY data_pregao DESC LIMIT 1
         ) cd ON TRUE
-        WHERE p.data_com IS NOT NULL
-        GROUP BY p.id_ativo, EXTRACT(MONTH FROM p.data_com)
+        WHERE event.event_date IS NOT NULL
+        GROUP BY p.id_ativo, event.event_kind, EXTRACT(MONTH FROM event.event_date)
         ON CONFLICT (id_ativo, mes_calendario, tipo_evento) DO UPDATE
         SET
             ocorrencias_historicas = EXCLUDED.ocorrencias_historicas,
@@ -58,9 +60,16 @@ class DividendSeasonalityAggregator:
             data_atualizacao = NOW();
         """
 
-        async with self.db_pool.acquire() as conn:
-            result = await conn.execute(query)
-            # Count current aggregated rows
-            count_val = await conn.fetchval("SELECT count(*) FROM analytics.mapa_sazonalidade_dividendo")
+        async def refresh(connection):
+            async with connection.transaction():
+                # Derived cache: remove obsolete months/assets in the same transaction.
+                await connection.execute("DELETE FROM analytics.mapa_sazonalidade_dividendo")
+                result = await connection.execute(query)
+                count_val = await connection.fetchval("SELECT count(*) FROM analytics.mapa_sazonalidade_dividendo")
             logger.info(f"Dividend seasonality aggregation completed. Result: {result}, Total entries: {count_val}")
             return {"status": "success", "result": result, "total_records": count_val}
+
+        if conn is not None:
+            return await refresh(conn)
+        async with self.db_pool.acquire() as connection:
+            return await refresh(connection)
