@@ -20,6 +20,7 @@ B3_URL = "https://sistemaswebb3-listados.b3.com.br/listedCompaniesProxy/CompanyC
 TYPES = {"DIVIDENDO": "DIVIDENDO", "DIVIDENDOS": "DIVIDENDO", "JCP": "JCP",
          "JRS CAP PROPRIO": "JCP", "RENDIMENTO": "RENDIMENTO",
          "REND. TRIBUTADO": "RENDIMENTO_TRIBUTADO"}
+CAPITAL_ACTIONS = {"REST CAP DIN", "AMORTIZACAO RF"}
 
 
 def br_date(value):
@@ -49,6 +50,8 @@ def parse_b3(payload, isin):
         for row in company.get("cashDividends", []):
             if row.get("isinCode") != isin:
                 continue
+            if row.get("label", "").strip().upper() in CAPITAL_ACTIONS:
+                continue  # Capital returned is not dividend income; retain its raw snapshot.
             if not row.get("paymentDate") or row["paymentDate"] in {"01/01/0001", "31/12/9999"}:
                 continue  # Unknown payments remain in the source snapshot.
             records.append(cash_event(row["label"], row["lastDatePrior"], row["paymentDate"],
@@ -74,29 +77,30 @@ def parse_statusinvest(html):
 
 
 async def archive_synthetic(conn):
-    """Reversible quarantine of the exact signature of the two broken importers.
+    """Reversible quarantine of payments without any source evidence.
 
     Referenced rows abort the transaction rather than erase user history.
     """
     # Never cascade away calendar entries. Preserve user references for review.
     referenced = await conn.fetchval("""SELECT count(*) FROM market.calendario_proventos c
         JOIN market.provento p USING(id_provento)
-        WHERE p.fonte_provento IS NULL AND p.data_anuncio IS NULL AND p.observacao IS NULL
-          AND p.data_com=p.data_ex-1 AND p.data_pagamento=p.data_ex
-          AND p.mes_referencia=to_char(p.data_com,'YYYY-MM')""")
+        WHERE p.fonte_provento IS NULL""")
     if referenced:
         raise ValueError("Synthetic events have calendar references; manual reconciliation required")
     return await conn.fetchval("""
         WITH moved AS (
             DELETE FROM market.provento p
-            WHERE fonte_provento IS NULL AND data_anuncio IS NULL AND observacao IS NULL
-              AND data_com=data_ex-1 AND data_pagamento=data_ex
-              AND mes_referencia=to_char(data_com,'YYYY-MM')
-              AND tipo_provento::text IN ('DIVIDENDO','RENDIMENTO')
+            WHERE fonte_provento IS NULL
             RETURNING p.*
         ), archived AS (
             INSERT INTO ingestion.provento_quarentena(id_provento,registro_original,motivo)
-            SELECT id_provento,to_jsonb(moved),'YAHOO_AGGREGATE_WITH_INVENTED_PAYMENT'
+            SELECT id_provento,to_jsonb(moved),CASE
+                WHEN data_anuncio IS NULL AND observacao IS NULL
+                  AND data_com=data_ex-1 AND data_pagamento=data_ex
+                  AND mes_referencia=to_char(data_com,'YYYY-MM')
+                  AND tipo_provento::text IN ('DIVIDENDO','RENDIMENTO')
+                THEN 'YAHOO_AGGREGATE_WITH_INVENTED_PAYMENT'
+                ELSE 'LEGACY_WITHOUT_SOURCE_EVIDENCE' END
             FROM moved RETURNING id_provento
         ) SELECT count(*) FROM archived
     """)
@@ -151,6 +155,10 @@ async def run(pool, *, apply=False, tickers=None, html=None, html_ticker=None, q
             issuers.setdefault(asset["ticker"][:4], []).append(asset)
     report = {"status": "SUCCEEDED", "assets": len(assets), "written": 0,
               "quarantined": 0, "coverage": [], "errors": []}
+    report["coverage"].extend({"ticker": a["ticker"], "status": "MISSING_ISIN"}
+                              for a in assets if not a["isin"])
+    issuers = {issuer: [a for a in members if a["isin"]]
+               for issuer, members in issuers.items() if any(a["isin"] for a in members)}
     # Fetch independently with a small bounded concurrency. The single database
     # transaction below prevents exposing a partially repaired calendar.
     semaphore = asyncio.Semaphore(3)
@@ -187,13 +195,10 @@ async def run(pool, *, apply=False, tickers=None, html=None, html_ticker=None, q
             report["coverage"].extend({"ticker": a["ticker"], "status": "SOURCE_UNAVAILABLE"} for a in members)
             continue
         for asset in members:
-            if not asset["isin"]:
-                report["coverage"].append({"ticker": asset["ticker"], "status": "MISSING_ISIN"})
-                continue
             try:
                 rows = parse_b3(data, asset["isin"])
             except (ValueError, KeyError) as exc:
-                report["errors"].append({"ticker": asset["ticker"], "error_type": type(exc).__name__})
+                report["errors"].append({"ticker": asset["ticker"], "error_type": type(exc).__name__, "detail": str(exc)})
                 continue
             prepared.append((asset["id_ativo"], rows))
             report["coverage"].append({"ticker": asset["ticker"], "status": "VERIFIED" if rows else "NO_DATED_PAYMENTS",
@@ -226,12 +231,27 @@ async def run(pool, *, apply=False, tickers=None, html=None, html_ticker=None, q
                 report["written"] += await persist(conn, asset_id, rows, "B3")
             if html_rows:
                 report["written"] += await persist(conn, html_asset["id_ativo"], html_rows, "STATUSINVEST_USER_HTML")
+            if await conn.fetchval("SELECT to_regclass('analytics.cagg_provento_mensal') IS NOT NULL"):
+                await conn.execute("REFRESH MATERIALIZED VIEW analytics.cagg_provento_mensal")
     return report
 
 
 async def main_async(args):
     pool = await create_pool_with_retry(settings.database_url_async.replace("postgresql+asyncpg://", "postgresql://"))
     try:
+        if args.refresh_identifiers:
+            if not args.apply:
+                raise ValueError("Identifier refresh requires --apply")
+            from fin_ingestion.collectors.official.b3 import B3Collector
+            from fin_ingestion.dw.dw_writer import DWWriter
+
+            collector, writer = B3Collector(), DWWriter()
+            writer._pool = pool
+            try:
+                await collector.get_recent_traded_tickers()
+                await writer.write_instrument_identifiers(collector.recent_daily_quotes)
+            finally:
+                await collector.close()
         report = await run(pool, apply=args.apply, tickers=args.tickers.split(",") if args.tickers else None,
                            html=args.html, html_ticker=args.html_ticker, quarantine=args.quarantine)
         output = Path(args.output)
@@ -247,6 +267,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--quarantine", action="store_true")
+    parser.add_argument("--refresh-identifiers", action="store_true")
     parser.add_argument("--tickers")
     parser.add_argument("--html")
     parser.add_argument("--html-ticker")

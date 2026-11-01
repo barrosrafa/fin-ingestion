@@ -45,6 +45,7 @@ class MarketGateway:
         issuer. Registry gaps are explicit; they never discard official prices.
         """
         official = await self.b3.get_daily_quotes(reference_date)
+        await self.writer.write_instrument_identifiers(official)
         records = [self.normalize_official(row, reference_date) for row in official]
         tickers = {r["ticker"] for r in records}
         if not records or len(tickers) != len(records):

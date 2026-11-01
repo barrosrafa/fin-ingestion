@@ -27,6 +27,13 @@ def test_equal_installments_and_share_classes_are_preserved():
     assert rows[0]["tipo_provento"] == "JCP"
 
 
+def test_capital_returns_do_not_suppress_dividend_income():
+    rows = parse_b3([{"cashDividends": [event(label="REST CAP DIN"),
+                     event(label="AMORTIZACAO RF"), event()]}], "BRPETRACNPR6")
+    assert len(rows) == 1
+    assert rows[0]["tipo_provento"] == "JCP"
+
+
 def test_invalid_or_incomplete_events_are_not_invented():
     with pytest.raises(ValueError):
         parse_b3([{"cashDividends": [event(label="UNKNOWN")]}], "BRPETRACNPR6")
@@ -49,7 +56,7 @@ async def test_real_postgres_installments_replay_quarantine_and_source_precedenc
     conn = await asyncpg.connect(server.get_uri())
     try:
         await conn.execute("""
-            CREATE SCHEMA market; CREATE SCHEMA ingestion;
+            CREATE SCHEMA market; CREATE SCHEMA ingestion; CREATE SCHEMA analytics;
             CREATE TYPE market.tipo_provento_enum AS ENUM('DIVIDENDO','JCP','RENDIMENTO');
             CREATE TABLE market.provento(id_provento bigserial PRIMARY KEY,id_ativo int,
                 tipo_provento market.tipo_provento_enum,data_com date,data_ex date,
@@ -58,17 +65,27 @@ async def test_real_postgres_installments_replay_quarantine_and_source_precedenc
                 UNIQUE(id_ativo,tipo_provento,data_com,data_pagamento));
             CREATE UNIQUE INDEX uq_provento_ativo_tipo_ex_valor
                 ON market.provento(id_ativo,tipo_provento,data_ex,valor_por_acao);
+            CREATE VIEW analytics.payment_values WITH(security_barrier=true) AS SELECT valor_por_acao FROM market.provento;
+            CREATE MATERIALIZED VIEW analytics.payment_sum AS SELECT sum(valor_por_acao) AS total FROM analytics.payment_values WITH NO DATA;
+            CREATE UNIQUE INDEX payment_sum_total ON analytics.payment_sum(total);
+            COMMENT ON VIEW analytics.payment_values IS 'retained comment';
             CREATE TABLE market.calendario_proventos(id_provento bigint REFERENCES market.provento);
             INSERT INTO market.provento(id_ativo,tipo_provento,data_com,data_ex,data_pagamento,
                 valor_por_acao,mes_referencia)
-            VALUES(1,'DIVIDENDO','2026-08-23','2026-08-24','2026-08-24',1.348143,'2026-08');
+            VALUES(1,'DIVIDENDO','2026-08-23','2026-08-24','2026-08-24',1.348143,'2026-08'),
+                  (2,'DIVIDENDO','2024-08-21','2024-08-22','2024-11-20',1.15,'08/2024');
         """)
         for path in sorted((Path(__file__).parents[1] / "migrations/22_cash_dividend_integrity").glob("*.sql")):
             await conn.execute(path.read_text())
+        assert await conn.fetchval("SELECT obj_description('analytics.payment_values'::regclass)") == 'retained comment'
+        assert await conn.fetchval("SELECT reloptions FROM pg_class WHERE oid='analytics.payment_values'::regclass") == ['security_barrier=true']
+        await conn.execute("REFRESH MATERIALIZED VIEW analytics.payment_sum")
         async with conn.transaction():
-            assert await archive_synthetic(conn) == 1
+            assert await archive_synthetic(conn) == 2
             assert await archive_synthetic(conn) == 0
-        assert await conn.fetchval("SELECT count(*) FROM ingestion.provento_quarentena") == 1
+        assert await conn.fetchval("SELECT count(*) FROM ingestion.provento_quarentena") == 2
+        assert {r["motivo"] for r in await conn.fetch("SELECT motivo FROM ingestion.provento_quarentena")} == {
+            "YAHOO_AGGREGATE_WITH_INVENTED_PAYMENT", "LEGACY_WITHOUT_SOURCE_EVIDENCE"}
         rows = parse_b3([{"cashDividends": [event(), event(paymentDate="21/09/2026")]}], "BRPETRACNPR6")
         for _ in range(2):
             await persist(conn, 1, rows, "B3")
@@ -80,6 +97,7 @@ async def test_real_postgres_installments_replay_quarantine_and_source_precedenc
         corrected = [dict(income[0], tipo_provento="RENDIMENTO_TRIBUTADO", valor_por_acao=Decimal("0.01314955"))]
         await persist(conn, 1, corrected, "STATUSINVEST_USER_HTML")
         await persist(conn, 1, income, "B3")
+        assert await archive_synthetic(conn) == 0
         assert await conn.fetchval("SELECT count(*) FROM market.provento") == 3
         assert await conn.fetchval("SELECT valor_por_acao FROM market.provento WHERE tipo_provento='RENDIMENTO_TRIBUTADO'") == Decimal("0.01314955")
     finally:

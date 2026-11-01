@@ -22,15 +22,16 @@ significa que o ativo nunca pagou proventos; a janela da fonte é limitada.
 Depois de passar na CI, aplicar as migrations e executar:
 
 ```sh
-python -m fin_ingestion.pipelines.cash_dividends --apply --quarantine \
+python -m fin_ingestion.pipelines.cash_dividends --apply --quarantine --refresh-identifiers \
   --html data/reference/statusinvest-petr4-2026-10-31.html --html-ticker PETR4
 ```
 
 Sem `--apply`, a operação só consulta fontes e produz o relatório. `--quarantine`
-é reservado à recuperação do universo completo. Registros sem proveniência que
+é reservado à recuperação do universo completo. Registros sem proveniência são movidos para quarentena. Os que
 correspondam à assinatura dos dois importadores Yahoo antigos (pagamento igual
 à data ex, data com igual à data ex menos um dia corrido, sem anúncio/observação,
-competência ISO) são movidos, na mesma transação, para
+competência ISO) recebem um motivo específico; os demais ficam pendentes de
+verificação como `LEGACY_WITHOUT_SOURCE_EVIDENCE`. Tudo ocorre, na mesma transação, em
 `ingestion.provento_quarentena`, preservando integralmente cada registro original.
 Referências de usuários impedem a remoção; o processo falha e reverte a transação.
 Não se convertem esses agregados em pagamentos históricos inventados quando a
@@ -46,3 +47,13 @@ permanecer identificados; não há promessa de igualdade entre fontes divergente
 Para reverter uma quarentena, selecionar os IDs desejados e restaurar as colunas
 do JSON original em uma transação revisada, após conciliar pagamentos novos e
 referências. Não restaurar automaticamente os agregados sobre a agenda corrigida.
+
+As restituições de capital (`REST CAP DIN`) e amortizações (`AMORTIZACAO RF`)
+permanecem no snapshot original e não entram na soma de renda de dividendos.
+O fechamento oficial também completa os ISINs ausentes com o COTAHIST, sem
+sobrescrever identificadores existentes.
+
+A migração de precisão destaca temporariamente as views dependentes e as
+recria em ordem, preservando definição, proprietário, opções, índices e grants.
+O runner operacional atualiza a visão materializada mensal dentro da mesma
+transação; a recuperação dos pagamentos volta a atualizá-la após a conciliação.
