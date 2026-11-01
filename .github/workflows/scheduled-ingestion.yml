@@ -25,6 +25,7 @@ on:
           - 'enrich_metadata'
           - 'compute_analytics'
           - 'test_sources'
+          - 'cash_dividends_repair'
         default: 'daily_market'
       tickers:
         description: 'Tickers específicos (opcional, separados por vírgula)'
@@ -187,6 +188,13 @@ jobs:
               compute_analytics)
                 uv run fin-ingestion compute-analytics
                 ;;
+              cash_dividends_repair)
+                uv run --frozen --no-dev python -m scripts.apply_runtime_migrations --apply
+                uv run --frozen --no-dev python -m fin_ingestion.pipelines.cash_dividends --apply --quarantine \
+                  --html data/reference/statusinvest-petr4-2026-10-31.html --html-ticker PETR4
+                uv run fin-ingestion compute-analytics
+                uv run fin-ingestion dbt-run --models "+fct_provento"
+                ;;
               test_sources)
                 uv run fin-ingestion test-sources
                 ;;
@@ -211,6 +219,14 @@ jobs:
             echo 'Unknown schedule trigger'
             exit 1
           fi
+
+      - name: Upload dividend repair receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cash-dividends-repair
+          path: data/cash-dividends.json
+          if-no-files-found: ignore
 
       - name: Upload dbt diagnostics
         if: always()

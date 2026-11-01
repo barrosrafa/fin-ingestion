@@ -61,7 +61,7 @@ def datasets_for(profile: str, now: datetime) -> list[str]:
     if not MarketCalendar.is_b3_trading_day(local.date()):
         return []
     if profile == "daily":
-        return ["market_eod"]
+        return ["market_eod", "cash_dividends"]
     return ["ptax"] if profile == "ptax" else ["tesouro"]
 
 
@@ -116,7 +116,7 @@ def build_gold(profile=None):
         "DBT_SSLMODE": "require",
     }
     models = GOLD_MODELS + {
-        "daily": ["+fct_cotacao_diaria"],
+        "daily": ["+fct_cotacao_diaria", "+fct_provento"],
         "monthly": ["+fct_fii_snapshot_mensal"],
         "discovery": ["+dim_ativo"],
     }.get(profile, [])
@@ -128,6 +128,14 @@ def build_gold(profile=None):
 
 
 async def run_dataset(dataset, day, pool, cnpjs):
+    if dataset == "cash_dividends":
+        from fin_ingestion.pipelines.cash_dividends import run
+
+        report = await run(pool, apply=True)
+        if report["errors"]:
+            raise RuntimeError("Incomplete B3 dividend collection; inspect source coverage")
+        return {**report, "total_records": report["written"], "records_loaded": report["written"]}
+
     if dataset == "market_eod":
         gateway = MarketGateway(pool=pool)
         try:

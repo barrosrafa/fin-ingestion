@@ -115,32 +115,12 @@ class HistoricalBackfillPipeline:
 
         ipo_date = min((c["data_pregao"] for c in candles), default=None)
 
-        # Proventos (Dividends / JCP / Rendimentos)
+        # Yahoo chart distributions are aggregates by ex-date, without payment
+        # dates or reliable JCP/dividend classification. Never promote these
+        # observations to the confirmed cash-payment calendar.
         raw_events = res.get("events", {})
-        raw_divs = raw_events.get("dividends", {})
         raw_splits = raw_events.get("splits", {})
-
         div_records = []
-        is_fii = (tipo_ativo or "").upper() == "FII"
-
-        for ts_str, d in raw_divs.items():
-            amt = d.get("amount")
-            if amt is None or amt <= 0:
-                continue
-            dt_ex = datetime.fromtimestamp(int(ts_str), tz=timezone.utc).date()
-            dt_com = dt_ex - timedelta(days=1)
-            dt_pag = dt_ex
-
-            tipo_prov = "RENDIMENTO" if is_fii else "DIVIDENDO"
-
-            div_records.append({
-                "data_com": dt_com,
-                "data_ex": dt_ex,
-                "data_pagamento": dt_pag,
-                "valor_por_acao": Decimal(str(round(amt, 6))),
-                "tipo_provento": tipo_prov,
-                "mes_referencia": dt_com.strftime("%Y-%m"),
-            })
 
         # Desdobramentos / Grupamentos
         split_records = []
@@ -391,7 +371,7 @@ class HistoricalBackfillPipeline:
                             """,
                             div_params,
                         )
-                    divs_written = len(divs)
+                    divs_written = len(div_params)
 
                 # 4. Upsert idempotente de Desdobramentos / Splits
                 if splits:

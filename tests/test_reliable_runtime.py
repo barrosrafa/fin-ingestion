@@ -29,7 +29,9 @@ def runtime_db(tmp_path):
         try:
             async with pool.acquire() as conn:
                 await conn.execute(
-                    "CREATE SCHEMA ingestion; CREATE SCHEMA system; "
+                    "CREATE SCHEMA ingestion; CREATE SCHEMA system; CREATE SCHEMA market; "
+                    "CREATE TYPE market.tipo_provento_enum AS ENUM('DIVIDENDO','JCP','RENDIMENTO'); "
+                    "CREATE TABLE market.provento(id_provento bigint PRIMARY KEY,valor_por_acao numeric(12,6)); "
                     "CREATE TABLE system.schema_migrations(version text PRIMARY KEY,checksum text)"
                 )
             await migrate(pool, apply=True)

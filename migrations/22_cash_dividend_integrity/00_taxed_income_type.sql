@@ -1,0 +1,1 @@
+ALTER TYPE market.tipo_provento_enum ADD VALUE IF NOT EXISTS 'RENDIMENTO_TRIBUTADO';

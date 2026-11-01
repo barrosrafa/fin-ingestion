@@ -61,11 +61,8 @@ def test_parse_yahoo_history_payload():
     assert c1["preco_fechamento"] == Decimal("10.50")
     assert c1["volume_total"] == Decimal("1000000")
 
-    # Verifica provento
-    assert len(result["dividends"]) == 1
-    d1 = result["dividends"][0]
-    assert d1["tipo_provento"] == "DIVIDENDO"
-    assert d1["valor_por_acao"] == Decimal("0.50")
+    # Yahoo supplies an ex-date aggregate, not a confirmed payment event.
+    assert result["dividends"] == []
 
     # Verifica split
     assert len(result["splits"]) == 1
@@ -74,7 +71,7 @@ def test_parse_yahoo_history_payload():
     assert s1["fator"] == Decimal("2.000000")
 
 
-def test_parse_fii_rendimento_classification():
+def test_yahoo_fii_aggregate_is_not_a_confirmed_payment():
     """Garante que proventos de FIIs são devidamente classificados como RENDIMENTO."""
     mock_payload = {
         "chart": {
@@ -101,8 +98,7 @@ def test_parse_fii_rendimento_classification():
         raw_data=mock_payload,
     )
 
-    assert len(result["dividends"]) == 1
-    assert result["dividends"][0]["tipo_provento"] == "RENDIMENTO"
+    assert result["dividends"] == []
 
 
 def test_parse_empty_or_delisted_payload():
