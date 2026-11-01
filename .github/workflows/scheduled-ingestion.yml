@@ -26,6 +26,7 @@ on:
           - 'compute_analytics'
           - 'test_sources'
           - 'cash_dividends_repair'
+          - 'cash_dividends_validate'
         default: 'daily_market'
       tickers:
         description: 'Tickers específicos (opcional, separados por vírgula)'
@@ -193,7 +194,10 @@ jobs:
                 uv run --frozen --no-dev python -m fin_ingestion.pipelines.cash_dividends --apply --quarantine --refresh-identifiers \
                   --html data/reference/statusinvest-petr4-2026-10-31.html --html-ticker PETR4
                 uv run fin-ingestion compute-analytics
-                uv run fin-ingestion dbt-run --models "+fct_provento"
+                uv run fin-ingestion dbt-run --models "+fct_provento+"
+                ;;
+              cash_dividends_validate)
+                uv run fin-ingestion dbt-run --models "+fct_provento+"
                 ;;
               test_sources)
                 uv run fin-ingestion test-sources

@@ -61,3 +61,9 @@ transação; a recuperação dos pagamentos volta a atualizá-la após a concili
 A recuperação também reconstrói a sazonalidade de data com e pagamento na mesma
 transação, removendo meses/ativos obsoletos do cache derivado. Assim, o mapa não
 continua exibindo os agregados antigos depois de corrigir a agenda.
+
+Os modelos Gold incluem os dependentes de `fct_provento` (`+fct_provento+`),
+para que o screener de FIIs não conserve totais antigos. O DY considera somente
+pagamentos anteriores à data corrente dentro de doze meses. A manutenção
+`cash_dividends_validate` reconstrói esse trecho e executa os testes sem repetir
+as chamadas às fontes nem a recuperação dos pagamentos.

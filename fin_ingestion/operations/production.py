@@ -116,7 +116,7 @@ def build_gold(profile=None):
         "DBT_SSLMODE": "require",
     }
     models = GOLD_MODELS + {
-        "daily": ["+fct_cotacao_diaria", "+fct_provento"],
+        "daily": ["+fct_cotacao_diaria", "+fct_provento+"],
         "monthly": ["+fct_fii_snapshot_mensal"],
         "discovery": ["+dim_ativo"],
     }.get(profile, [])
