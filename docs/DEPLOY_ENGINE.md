@@ -13,6 +13,8 @@ O Compose continua sendo uma alternativa para um host Docker administrável.
    A confiabilidade do runtime usa a migration aditiva
    `21_ingestion_schedule_reliability/01_runtime_ledger.sql`, empacotada em
    `migrations/` com checksum e grants explícitos ao papel de ingestão.
+   O runner exige `system.schema_migrations` e falha antes de abrir transação se
+   esse ledger estiver ausente; reconcilie o schema-base antes de reaplicar runtime.
 2. Exigir aprovação da CI do commit exato: testes reais PostgreSQL/Redis, Ruff e dbt.
 3. Executar `Deploy scheduled engine` em `main`. A referência opcional identifica o
    canário histórico; a carga preserva a data real de cada fonte e não a transforma

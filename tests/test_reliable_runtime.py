@@ -19,6 +19,29 @@ from fin_ingestion.operations.reliable_runtime import (
 from scripts.apply_runtime_migrations import migrate
 
 
+@pytest.mark.asyncio
+async def test_runtime_migrations_fail_closed_without_history_ledger():
+    class LedgerMissingPool:
+        def acquire(self):
+            return self
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def fetchval(self, query):
+            assert query == "SELECT to_regclass('system.schema_migrations') IS NOT NULL"
+            return False
+
+        def transaction(self, **kwargs):
+            raise AssertionError("migration transaction must not start without a ledger")
+
+    with pytest.raises(RuntimeError, match="system.schema_migrations is missing"):
+        await migrate(LedgerMissingPool(), apply=True)
+
+
 @pytest.fixture
 def runtime_db(tmp_path):
     pgserver = pytest.importorskip("pgserver")

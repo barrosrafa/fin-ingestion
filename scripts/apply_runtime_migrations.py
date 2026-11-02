@@ -15,6 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 async def migrate(pool, apply=False):
     report = []
     async with pool.acquire() as conn:
+        ledger_exists = await conn.fetchval("SELECT to_regclass('system.schema_migrations') IS NOT NULL")
+        if not ledger_exists:
+            raise RuntimeError(
+                "system.schema_migrations is missing; refusing to inspect or apply runtime migrations. "
+                "Reconcile the fin-db base schema and migration history first."
+            )
         async with conn.transaction(readonly=not apply):
             if apply:
                 await conn.execute("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='120s'")
