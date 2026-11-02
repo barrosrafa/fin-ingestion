@@ -3,9 +3,10 @@ Aderente estritamente ao DDL de market.cotacao_diaria e canonical.price_observat
 
 import asyncio
 import re
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import asyncpg
 import structlog
@@ -77,6 +78,8 @@ class DWWriter:
                 day = date.fromisoformat(day) if isinstance(day, str) else day
                 if type(day) is not date:
                     raise ValueError("data_pregao must be a date")
+                if day > datetime.now(ZoneInfo("America/Sao_Paulo")).date():
+                    raise ValueError("future market sessions are not observations")
             except (TypeError, ValueError) as exc:
                 valid, reason = False, str(exc)
             if not valid:
