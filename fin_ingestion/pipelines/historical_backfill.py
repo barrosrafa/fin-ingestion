@@ -309,7 +309,14 @@ class HistoricalBackfillPipeline:
                             preco_fechamento = EXCLUDED.preco_fechamento,
                             preco_medio = EXCLUDED.preco_medio,
                             volume_total = EXCLUDED.volume_total,
-                            variacao_percentual = EXCLUDED.variacao_percentual;
+                            variacao_percentual = EXCLUDED.variacao_percentual
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM market.nominal_bar official
+                            JOIN core.ativo identity ON identity.ticker = official.ticker
+                            WHERE identity.id_ativo = market.cotacao_diaria.id_ativo
+                              AND official.reference_date = market.cotacao_diaria.data_pregao
+                              AND official.source = 'b3' AND official.interval = 'day'
+                        );
                         """,
                         quote_params,
                     )
