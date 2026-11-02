@@ -32,6 +32,13 @@ def runtime_db(tmp_path):
                     "CREATE SCHEMA ingestion; CREATE SCHEMA system; CREATE SCHEMA market; "
                     "CREATE TYPE market.tipo_provento_enum AS ENUM('DIVIDENDO','JCP','RENDIMENTO'); "
                     "CREATE TABLE market.provento(id_provento bigint PRIMARY KEY,valor_por_acao numeric(12,6)); "
+                    "CREATE TABLE ingestion.source_policy(source_name varchar(50) PRIMARY KEY, "
+                    "requests_per_minute int NOT NULL DEFAULT 60, max_concurrency int NOT NULL DEFAULT 3); "
+                    "CREATE TABLE ingestion.ingestion_policy(policy_id varchar(50) PRIMARY KEY, "
+                    "dataset_name varchar(50) NOT NULL, source_name varchar(50) NOT NULL, "
+                    "calendar_type varchar(30) NOT NULL DEFAULT 'B3_TRADING_DAYS', "
+                    "cron_expression varchar(50) NOT NULL, priority smallint NOT NULL DEFAULT 5, "
+                    "is_active boolean NOT NULL DEFAULT true); "
                     "CREATE TABLE system.schema_migrations(version text PRIMARY KEY,checksum text)"
                 )
             await migrate(pool, apply=True)
@@ -58,7 +65,17 @@ async def test_real_migration_replay_and_atomic_catchup(runtime_db, monkeypatch)
     monkeypatch.setattr(settings, "intraday_enabled", False)
     pool = await asyncpg.create_pool(runtime_db, min_size=1, max_size=4)
     try:
-        assert all(r["state"] == "already_applied" for r in await migrate(pool, apply=True))
+        report = await migrate(pool, apply=True)
+        assert all(r["state"] == "already_applied" for r in report)
+        assert any(r["migration"] == "23_scheduler_policy_recovery/01_restore_disabled_policies.sql" for r in report)
+        async with pool.acquire() as conn:
+            policies = await conn.fetch(
+                "SELECT policy_id, is_active FROM ingestion.ingestion_policy "
+                "WHERE policy_id LIKE 'scheduled_%' ORDER BY policy_id"
+            )
+            sources = await conn.fetchval("SELECT count(*) FROM ingestion.source_policy")
+        assert len(policies) == 6 and all(not row["is_active"] for row in policies)
+        assert sources == 5
         first = datetime(2026, 10, 28, 22, tzinfo=timezone.utc)
         await materialize(pool, first)
         async with pool.acquire() as conn:
