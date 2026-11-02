@@ -4,9 +4,9 @@ Aderente estritamente ao DDL de market.cotacao_diaria e canonical.price_observat
 import asyncio
 import re
 from datetime import date, datetime
-from zoneinfo import ZoneInfo
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import asyncpg
 import structlog
